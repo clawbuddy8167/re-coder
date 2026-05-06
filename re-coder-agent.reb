@@ -203,20 +203,16 @@ http-post-json: func [
 ; ═══════════════════════════════════════════════════════════
 
 llm-client: make object! [
-    model:    config/model
-    api-key:  config/api-key
-    base-url: config/base-url
-
     chat: func [
         messages [block!]
         /with-tools tool-defs [block!]
     ][
-        url: to-url rejoin [base-url {/chat/completions}]
+        url: to-url rejoin [config/base-url {/chat/completions}]
 
         payload: make map! reduce [
-            to-set-word 'model model
+            to-set-word 'model config/model
             to-set-word 'messages messages
-            to-set-word 'temperature 0.1
+            ; to-set-word 'temperature 0.1
         ]
 
         if with-tools [
@@ -226,7 +222,7 @@ llm-client: make object! [
 
         headers: make map! reduce [
             to-set-word 'Content-Type {application/json}
-            to-set-word 'Authorization rejoin [{Bearer } api-key]
+            to-set-word 'Authorization rejoin [{Bearer } config/api-key]
         ]
 
         if config/print-llm-input [

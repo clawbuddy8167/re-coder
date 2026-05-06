@@ -30,8 +30,15 @@ rebol3 re-coder-agent.reb "Write a Node.js quicksort"
 # Custom model and base URL
 DEEPSEEK_API_KEY=sk-xxx \
 rebol3 re-coder-agent.reb \
-    --model deepseek-v4-flash \
-    --base-url https://api.deepseek.com \
+    --model kimi-k2.6 \
+    --base-url https://api.moonshot.cn/v1 \
+    "Explain how recursion works and write an example"
+
+
+DEEPSEEK_API_KEY=sk-xxx \
+rebol3 re-coder-agent.reb \
+    --model mimo-v2.5-pro \
+    --base-url https://api.xiaomimimo.com/v1 \
     "Explain how recursion works and write an example"
 
 # Working directory for agent output
