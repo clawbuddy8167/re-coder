@@ -9,10 +9,12 @@
 ## 文件结构
 
 ```
-re-coder/
-├── re-coder-agent.reb     ← 主程序（约 750 行）
-├── README.md              ← 默认英文说明
-└── README.zh-CN.md        ← 本文件（中文）
+re-coder-ai/
+├── re-coder-agent.reb              ← 主程序
+├── re-coder-rag-search.reb         ← RAG 检索（grep/rg + 可选 LLM）
+├── test-re-coder-rag-search.reb    ← 检索测试（21 项）
+├── README.md
+└── README.zh-CN.md                 ← 本文件
 ```
 
 ## 依赖
@@ -47,3 +49,53 @@ rebol3 re-coder-agent.reb \
     --work-dir ./output/ \
     "Create a Python CLI tool"
 ```
+
+**说明：** 当前仓库**不包含**「远端 RAG 服务配置 / CRUD」（类似 auto-coder 里的 `RAGConfigManager`），只提供本地 **`re-coder-rag-search.reb`** 关键词检索与 `rag-ask`。
+
+### RAG 检索（`re-coder-rag-search.reb`）
+
+检索层用 **`grep` / `rg`（有则优先）** 做**子串、不区分大小写**匹配，**不是**向量语义检索。传给 `rag-grep` / `rag-search` / `rag-ask` 的 **query 必须是代码或文档里会出现的片段**（函数名、注释、标题里的词等），整句英文问句往往 **0 命中**。
+
+```bash
+rebol3 test-re-coder-rag-search.reb
+# => 21/21 tests passed
+```
+
+```rebol
+do %./re-coder-rag-search.reb
+
+; rag-grep / rag-search：参数为「检索词」、目录、扩展名块或 none、最多条数
+probe rag-grep {quicksort} %. [%.py] 10
+results: rag-search {rag-search} %. [%.reb %.md] 5
+probe rag-build-context results
+
+; rag-ask：先要能 grep 到内容，才会组上下文并调聊天 API
+; 四个位置参数 + 可选 /model /url /key（默认 DeepSeek，密钥读 DEEPSEEK_API_KEY）
+answer: rag-ask {rag-grep} %. [%.reb] 5
+; answer: rag-ask {port} %. [%.reb %.md] 8 /model "deepseek-chat" /url "https://api.deepseek.com/v1" /key "sk-..."
+
+; 不推荐：整句提问当检索词（在 .reb 里通常匹配不到）
+; rag-ask "How does rag work?" %. [%.reb] 5
+
+; 可改为关键词 + 带上说明文档扩展名，例如：
+; rag-ask {rag-search} %. [%.reb %.md] 5
+```
+
+**`rag-ask` 参数**
+
+| 参数 | 含义 |
+|------|------|
+| `query` | 给 grep/rg 用的模式（关键词），不是自然语言完整问句 |
+| `dir-path` | 根目录，`%.` 为当前目录 |
+| `extensions` | `none` 不限扩展名，或 `[%.reb %.md]` 等 |
+| `max-results` | 最多采纳多少条命中 |
+| `/model` | 模型名（默认 `deepseek-chat`） |
+| `/url` | API 根 URL |
+| `/key` | API Key（不设则用环境变量 `DEEPSEEK_API_KEY`） |
+
+对外函数：`rag-grep`、`rag-search`、`rag-ask`、`rag-index-files`、`rag-build-context`、`rag-read-snippet`。
+
+| 对照 auto-coder.rag | 本仓库 |
+|---------------------|--------|
+| 配置 CRUD | 暂未提供 |
+| 检索 | `re-coder-rag-search.reb`（基于 grep/rg） |
