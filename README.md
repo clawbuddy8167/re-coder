@@ -13,7 +13,9 @@ re-coder-ai/
 ├── re-coder-agent.reb              ← main agent script
 ├── re-coder-cli.reb                ← interactive CLI (REPL)
 ├── re-coder-bg-worker.reb          ← background worker process
+├── re-coder-async-worker.reb       ← async task worker process
 ├── session-manager.reb             ← multi-session management
+├── async-manager.reb               ← async task management
 ├── re-coder                        ← launcher script (chmod +x)
 ├── re-coder-rag-search.reb         ← RAG search/retrieval (grep/rg + optional LLM)
 ├── test-re-coder-rag-search.reb    ← RAG search tests (21 tests)
@@ -81,6 +83,19 @@ DEEPSEEK_API_KEY=*** ./re-coder --model deepseek-chat "Explain async/await"
 | `/bg /drop <N>` | Drop session #N |
 | `/fork` | Fork current session (copy context) |
 | `/new` | Start a fresh session |
+
+**Async Tasks:**
+
+| Command | Description |
+|---------|-------------|
+| `/async /name <n> "prompt"` | Fire-and-forget background task |
+| `/async /name <n> /time 5m "p"` | Time-limited task (s/m/h) |
+| `/async /name <n> /loop 3 "p"` | Loop N iterations |
+| `/async /list` | List all async tasks |
+| `/async /task <name>` | View task output |
+| `/async /kill <name>` | Kill running task |
+| `/async /drop <name>` | Drop task + logs |
+
 
 **General Commands:**
 

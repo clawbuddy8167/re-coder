@@ -2,10 +2,10 @@ REBOL [
     Title:   {Re Coder CLI — Interactive Coding Agent}
     Name:    're-coder-cli
     Author:  {Hermes Agent}
-    Version: 2.0.0
+    Version: 3.0.0
     Rights:  {MIT}
     Purpose: {Interactive REPL-style CLI for re-coder-agent.
-              Supports multi-session background execution (/bg).
+              Supports /bg (session switching) and /async (fire-and-forget tasks).
               Modeled after Claude Code / Codex CLI experience.}
 ]
 
@@ -15,6 +15,7 @@ REBOL [
 
 do %./re-coder-agent-stream.reb
 do %./session-manager.reb
+do %./async-manager.reb
 
 ; ═══════════════════════════════════════════════════════════
 ;  CLI State
@@ -89,6 +90,17 @@ show-help: func [] [
     print rejoin [c-bright-cyan "  /bg /help" c-reset c-dim "     Show /bg help" c-reset]
     print rejoin [c-bright-cyan "  /fork" c-reset c-dim "         Fork current session (copy context)" c-reset]
     print rejoin [c-bright-cyan "  /new" c-reset c-dim "          Start a fresh session" c-reset]
+    print ""
+    print rejoin [c-bright-cyan c-bold "  Async Tasks (/async)" c-reset]
+    print rejoin [c-dim "  ─────────────────────────────────────────────────────" c-reset]
+    print rejoin [c-bright-cyan {  /async /name <n> "<prompt>"} c-reset c-dim {  Fire-and-forget task} c-reset]
+    print rejoin [c-bright-cyan {  /async /name <n> /time 5m "<p>"} c-reset c-dim { Time-limited} c-reset]
+    print rejoin [c-bright-cyan {  /async /name <n> /loop 3 "<p>"} c-reset c-dim { Loop N times} c-reset]
+    print rejoin [c-bright-cyan "  /async /list" c-reset c-dim "          List all async tasks" c-reset]
+    print rejoin [c-bright-cyan "  /async /task <name>" c-reset c-dim "      View task output" c-reset]
+    print rejoin [c-bright-cyan "  /async /kill <name>" c-reset c-dim "      Kill running task" c-reset]
+    print rejoin [c-bright-cyan "  /async /drop <name>" c-reset c-dim "      Drop task + logs" c-reset]
+    print rejoin [c-bright-cyan "  /async /help" c-reset c-dim "           Show /async help" c-reset]
     print ""
     print rejoin [c-bright-cyan c-bold "  General Commands" c-reset]
     print rejoin [c-dim "  ─────────────────────────────────────────────────────" c-reset]
@@ -405,6 +417,180 @@ process-user-input: func [
     session-manager/save-session active
 ]
 
+
+; ═══════════════════════════════════════════════════════════
+;  /async Command Handler
+; ═══════════════════════════════════════════════════════════
+
+handle-async-command: func [args [string!] /local parts subcmd name prompt time-limit loop-count
+    opts task result rows state-color arg rest output parsed-time out][
+    args: trim args
+    parts: copy []
+    foreach w split args " " [if not empty? trim w [append parts w]]
+    subcmd: either empty? args [none][parts/1]
+
+    case [
+        subcmd = "/help" [
+            print ""
+            print rejoin [c-bright-cyan c-bold "  /async — Fire-and-Forget Tasks" c-reset]
+            print rejoin [c-dim "  ─────────────────────────────────────────────────────" c-reset]
+            print rejoin [c-bright-cyan {  /async /name <n> "<prompt>"} c-reset c-dim {  Spawn named task} c-reset]
+            print rejoin [c-bright-cyan {  /async /name <n> /time 5m "<p>"} c-reset c-dim { Time-limited (s/m/h)} c-reset]
+            print rejoin [c-bright-cyan {  /async /name <n> /loop 3 "<p>"} c-reset c-dim { Loop N iterations} c-reset]
+            print rejoin [c-bright-cyan "  /async /list" c-reset c-dim "          List all tasks" c-reset]
+            print rejoin [c-bright-cyan "  /async /task <name>" c-reset c-dim "      View task output" c-reset]
+            print rejoin [c-bright-cyan "  /async /kill <name>" c-reset c-dim "      Kill running task" c-reset]
+            print rejoin [c-bright-cyan "  /async /drop <name>" c-reset c-dim "      Drop task + logs" c-reset]
+            print ""
+        ]
+
+        subcmd = "/list" [
+            async-manager/poll
+            rows: async-manager/list
+            print ""
+            print rejoin [c-bright-cyan c-bold "  Async Tasks" c-reset]
+            print rejoin [c-dim "  ────────────────────────────────────────────────────────────────" c-reset]
+            print rejoin [c-dim "  " c-bold
+                          pad/with "Name" 14 #" "
+                          pad/with "ID" 10 #" "
+                          pad/with "State" 10 #" "
+                          pad/with "Created" 10 #" "
+                          pad/with "Loops" 7 #" "
+                          "Prompt" c-reset]
+            print rejoin [c-dim "  ────────────────────────────────────────────────────────────────" c-reset]
+            foreach row rows [
+                state-color: case [
+                    row/3 = "running"  [c-yellow]
+                    row/3 = "done"     [c-green]
+                    row/3 = "error"    [c-red]
+                    true               [c-dim]
+                ]
+                print rejoin [
+                    "  "
+                    c-bright-white pad/with row/1 12 #" " c-reset " "
+                    c-dim pad/with row/2 8 #" " c-reset " "
+                    state-color pad/with row/3 8 #" " c-reset " "
+                    c-dim pad/with row/4 8 #" " c-reset " "
+                    c-dim pad/with rejoin [row/5 "/" row/6] 5 #" " c-reset " "
+                    c-dim row/7 c-reset
+                ]
+            ]
+            either empty? rows [
+                print rejoin [c-dim "  (no async tasks)" c-reset]
+            ][
+                print rejoin [c-dim "  Total: " c-reset c-bright-white to-string length? rows c-reset c-dim " task(s)" c-reset]
+            ]
+            print ""
+        ]
+
+        subcmd = "/task" [
+            name: parts/2
+            unless name [print rejoin [c-red "  Usage: /async /task <name>" c-reset] return]
+            task: async-manager/get-task name
+            either task [
+                async-manager/poll
+                print ""
+                print rejoin [c-bright-cyan c-bold "  Task: " name c-reset]
+                foreach line async-manager/format-detail task [print line]
+                print ""
+                output: async-manager/get-output task
+                either empty? output [
+                    print rejoin [c-dim "  (no output yet)" c-reset]
+                ][
+                    print rejoin [c-dim "  ── Output ──" c-reset]
+                    either (length? output) > 2000 [
+                        print rejoin [c-dim "  ..." copy/part skip output ((length? output) - 2000) 2000 c-reset]
+                    ][
+                        print rejoin [c-dim "  " output c-reset]
+                    ]
+                ]
+                print ""
+            ][
+                print rejoin [c-red "  Task not found: " name c-reset]
+            ]
+        ]
+
+        subcmd = "/kill" [
+            name: parts/2
+            unless name [print rejoin [c-red "  Usage: /async /kill <name>" c-reset] return]
+            task: async-manager/get-task name
+            either task [
+                result: async-manager/kill task
+                print rejoin [c-yellow "  ✓ " result c-reset]
+            ][
+                print rejoin [c-red "  Task not found: " name c-reset]
+            ]
+        ]
+
+        subcmd = "/drop" [
+            name: parts/2
+            unless name [print rejoin [c-red "  Usage: /async /drop <name>" c-reset] return]
+            result: async-manager/drop name
+            print rejoin [c-dim "  " result c-reset]
+        ]
+
+        subcmd = "/name" [
+            name: parts/2
+            unless name [print rejoin [c-red "  Usage: /async /name <name> "prompt"" c-reset] return]
+
+            time-limit: none
+            loop-count: 1
+            rest: copy skip parts 2
+
+            while [not empty? rest] [
+                arg: first rest
+                case [
+                    arg = "/time" [
+                        either (length? rest) > 1 [
+                            time-limit: second rest
+                            rest: skip rest 2
+                        ][print rejoin [c-red "  /time needs value" c-reset] return]
+                    ]
+                    arg = "/loop" [
+                        either (length? rest) > 1 [
+                            loop-count: any [attempt [to-integer second rest] 1]
+                            rest: skip rest 2
+                        ][print rejoin [c-red "  /loop needs number" c-reset] return]
+                    ]
+                    true [break]
+                ]
+            ]
+
+            prompt: either empty? rest [""][
+                out: copy ""
+                foreach w rest [unless empty? out [append out " "] append out w]
+                if all [(length? out) >= 2 (first out) = #"^"" (last out) = #"^""][
+                    out: copy/part skip out 1 ((length? out) - 1)
+                ]
+                out
+            ]
+
+            if empty? prompt [print rejoin [c-red "  Usage: /async /name <name> "prompt"" c-reset] return]
+
+            opts: make map! []
+            if time-limit [
+                parsed-time: async-manager/parse-time time-limit
+                if parsed-time [put opts 'time-limit parsed-time]
+            ]
+            if loop-count > 1 [put opts 'loop-count loop-count]
+
+            task: async-manager/create/options name prompt opts
+            either object? task [
+                task: async-manager/start task
+                print rejoin [c-green "  ✓ Async task: " c-reset c-bright-white name c-reset c-dim " (" task/id ")" c-reset]
+                if loop-count > 1 [print rejoin [c-dim "  Loops: " loop-count c-reset]]
+                if time-limit [print rejoin [c-dim "  Time: " time-limit c-reset]]
+            ][
+                print rejoin [c-red "  ✗ " task c-reset]
+            ]
+        ]
+
+        true [
+            print rejoin [c-red "  Unknown /async command: " subcmd c-reset]
+        ]
+    ]
+]
+
 ; ═══════════════════════════════════════════════════════════
 ;  /bg Command Handler
 ; ═══════════════════════════════════════════════════════════
@@ -692,6 +878,7 @@ handle-command: func [cmd [string!] /local parts arg command active result][
 
         ; ── Session commands ──
         "/bg"      [handle-bg-command any [arg ""]]
+        "/async"   [handle-async-command any [arg ""]]
         "/sessions" [show-session-list]
         "/fork"    [
             result: session-manager/fork

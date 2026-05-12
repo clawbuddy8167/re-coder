@@ -13,7 +13,9 @@ re-coder-ai/
 ├── re-coder-agent.reb              ← 主程序
 ├── re-coder-cli.reb                ← 交互式 CLI (REPL)
 ├── re-coder-bg-worker.reb          ← 后台 worker 进程
+├── re-coder-async-worker.reb       ← 异步任务 worker 进程
 ├── session-manager.reb             ← 多会话管理
+├── async-manager.reb               ← 异步任务管理
 ├── re-coder                        ← 启动脚本 (chmod +x)
 ├── re-coder-rag-search.reb         ← RAG 检索（grep/rg + 可选 LLM）
 ├── test-re-coder-rag-search.reb    ← 检索测试（21 项）
@@ -54,6 +56,19 @@ DEEPSEEK_API_KEY=*** ./re-coder --model deepseek-chat "解释 async/await"
 | `/bg /drop <N>` | 丢弃第 N 号会话 |
 | `/fork` | 分叉当前会话（复制上下文） |
 | `/new` | 开始全新会话 |
+
+**异步任务：**
+
+| 命令 | 说明 |
+|------|------|
+| `/async /name <名称> "提示词"` | fire-and-forget 后台任务 |
+| `/async /name <名称> /time 5m "p"` | 限时任务（s/m/h） |
+| `/async /name <名称> /loop 3 "p"` | 循环 N 次 |
+| `/async /list` | 列出所有异步任务 |
+| `/async /task <名称>` | 查看任务输出 |
+| `/async /kill <名称>` | 终止任务 |
+| `/async /drop <名称>` | 删除任务+日志 |
+
 
 **通用命令：**
 
