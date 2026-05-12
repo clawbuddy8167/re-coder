@@ -2,9 +2,10 @@ REBOL [
     Title:   {Re Coder CLI — Interactive Coding Agent}
     Name:    're-coder-cli
     Author:  {Hermes Agent}
-    Version: 1.0.0
+    Version: 2.0.0
     Rights:  {MIT}
     Purpose: {Interactive REPL-style CLI for re-coder-agent.
+              Supports multi-session background execution (/bg).
               Modeled after Claude Code / Codex CLI experience.}
 ]
 
@@ -13,6 +14,7 @@ REBOL [
 ; ═══════════════════════════════════════════════════════════
 
 do %./re-coder-agent-stream.reb
+do %./session-manager.reb
 
 ; ═══════════════════════════════════════════════════════════
 ;  CLI State
@@ -20,24 +22,19 @@ do %./re-coder-agent-stream.reb
 
 cli-state: make object! [
     running:       true
-    conversation:  copy []      ; message history
     turn-count:    0
     session-start: none
     input-buffer:  copy ""
-    multi-line:    false        ; multi-line input mode
+    multi-line:    false
 ]
 
 ; ═══════════════════════════════════════════════════════════
 ;  ANSI Color Helpers
 ; ═══════════════════════════════════════════════════════════
 
-; Reset
 c-reset:   "^[[0m"
-; Bold
 c-bold:    "^[[1m"
-; Dim
 c-dim:     "^[[2m"
-; Colors
 c-red:     "^[[31m"
 c-green:   "^[[32m"
 c-yellow:  "^[[33m"
@@ -45,19 +42,16 @@ c-blue:    "^[[34m"
 c-magenta: "^[[35m"
 c-cyan:    "^[[36m"
 c-white:   "^[[37m"
-; Bright
 c-bright-green:  "^[[92m"
 c-bright-cyan:   "^[[96m"
 c-bright-yellow: "^[[93m"
 c-bright-white:  "^[[97m"
-; Background
-c-bg-dark: "^[[48;5;236m"
 
 ; ═══════════════════════════════════════════════════════════
 ;  Banner
 ; ═══════════════════════════════════════════════════════════
 
-show-banner: func [/local version-line model-line api-line dir-line stream-line] [
+show-banner: func [] [
     print ""
     print rejoin [c-cyan c-bold "  ╔═══════════════════════════════════════════════════════════════╗" c-reset]
     print rejoin [c-cyan c-bold "  ║" c-reset
@@ -68,24 +62,12 @@ show-banner: func [/local version-line model-line api-line dir-line stream-line]
                   c-cyan c-bold "                     ║" c-reset]
     print rejoin [c-cyan c-bold "  ╚═══════════════════════════════════════════════════════════════╝" c-reset]
     print ""
-
-    ; Status line
-    version-line: rejoin [c-dim "  Version:  1.0.0" c-reset]
-    model-line:   rejoin [c-dim "  Model:    " c-reset c-bright-green config/model c-reset]
-    api-line:     rejoin [c-dim "  API:      " c-reset c-dim config/base-url c-reset]
-    dir-line:     rejoin [c-dim "  Work Dir: " c-reset c-dim to-string config/work-dir c-reset]
-    stream-line:  rejoin [c-dim "  Stream:   " c-reset
-                          either config/stream-mode [
-                              rejoin [c-green "ON" c-reset]
-                          ][
-                              rejoin [c-yellow "OFF" c-reset]
-                          ]]
-
-    print version-line
-    print model-line
-    print api-line
-    print dir-line
-    print stream-line
+    print rejoin [c-dim "  Model:    " c-reset c-bright-green config/model c-reset]
+    print rejoin [c-dim "  API:      " c-reset c-dim config/base-url c-reset]
+    print rejoin [c-dim "  Work Dir: " c-reset c-dim to-string config/work-dir c-reset]
+    print rejoin [c-dim "  Stream:   " c-reset
+                  either config/stream-mode [rejoin [c-green "ON"]][rejoin [c-yellow "OFF"]]
+                  c-reset]
     print ""
     print rejoin [c-dim "  Type " c-reset c-bright-cyan "/help" c-reset c-dim " for commands, " c-reset
                   c-bright-cyan "/quit" c-reset c-dim " to exit" c-reset]
@@ -98,24 +80,50 @@ show-banner: func [/local version-line model-line api-line dir-line stream-line]
 
 show-help: func [] [
     print ""
-    print rejoin [c-bright-cyan c-bold "  Commands" c-reset]
+    print rejoin [c-bright-cyan c-bold "  Session Commands" c-reset]
     print rejoin [c-dim "  ─────────────────────────────────────────────────────" c-reset]
-    print rejoin [c-bright-cyan "  /help" c-reset c-dim "        Show this help message" c-reset]
-    print rejoin [c-bright-cyan "  /quit" c-reset c-dim "        Exit the CLI" c-reset]
-    print rejoin [c-bright-cyan "  /exit" c-reset c-dim "        Same as /quit" c-reset]
-    print rejoin [c-bright-cyan "  /clear" c-reset c-dim "       Clear conversation history" c-reset]
-    print rejoin [c-bright-cyan "  /history" c-reset c-dim "     Show conversation summary" c-reset]
-    print rejoin [c-bright-cyan "  /model" c-reset c-dim " <name> Switch model (e.g. deepseek-chat)" c-reset]
-    print rejoin [c-bright-cyan "  /workdir" c-reset c-dim " <d>  Set working directory" c-reset]
+    print rejoin [c-bright-cyan "  /bg" c-reset c-dim "           Send current session to background" c-reset]
+    print rejoin [c-bright-cyan "  /bg /list" c-reset c-dim "     List all sessions" c-reset]
+    print rejoin [c-bright-cyan "  /bg <N>" c-reset c-dim "       Resume session #N (swap foreground)" c-reset]
+    print rejoin [c-bright-cyan "  /bg /drop <N>" c-reset c-dim " Drop session #N" c-reset]
+    print rejoin [c-bright-cyan "  /bg /help" c-reset c-dim "     Show /bg help" c-reset]
+    print rejoin [c-bright-cyan "  /fork" c-reset c-dim "         Fork current session (copy context)" c-reset]
+    print rejoin [c-bright-cyan "  /new" c-reset c-dim "          Start a fresh session" c-reset]
+    print ""
+    print rejoin [c-bright-cyan c-bold "  General Commands" c-reset]
+    print rejoin [c-dim "  ─────────────────────────────────────────────────────" c-reset]
+    print rejoin [c-bright-cyan "  /help" c-reset c-dim "         Show this help" c-reset]
+    print rejoin [c-bright-cyan "  /quit" c-reset c-dim "         Exit (same as /exit)" c-reset]
+    print rejoin [c-bright-cyan "  /clear" c-reset c-dim "        Clear current conversation" c-reset]
+    print rejoin [c-bright-cyan "  /history" c-reset c-dim "      Show message count" c-reset]
+    print rejoin [c-bright-cyan "  /model <name>" c-reset c-dim " Switch model" c-reset]
+    print rejoin [c-bright-cyan "  /workdir <d>" c-reset c-dim "  Set working directory" c-reset]
     print rejoin [c-bright-cyan "  /stream" c-reset c-dim "       Toggle streaming ON/OFF" c-reset]
-    print rejoin [c-bright-cyan "  /config" c-reset c-dim "       Show current configuration" c-reset]
+    print rejoin [c-bright-cyan "  /config" c-reset c-dim "       Show current config" c-reset]
     print rejoin [c-bright-cyan "  /multi" c-reset c-dim "        Toggle multi-line input mode" c-reset]
     print ""
-    print rejoin [c-bright-cyan c-bold "  Input" c-reset]
+    print rejoin [c-dim "  Multi-line: type " c-reset c-bright-cyan "///" c-reset c-dim " (triple slash) or use " c-reset
+                  c-bright-cyan "/multi" c-reset c-dim " toggle" c-reset]
+    print ""
+]
+
+show-bg-help: func [] [
+    print ""
+    print rejoin [c-bright-cyan c-bold "  /bg — Background Session Management" c-reset]
     print rejoin [c-dim "  ─────────────────────────────────────────────────────" c-reset]
-    print rejoin [c-dim "  Type your coding task and press Enter." c-reset]
-    print rejoin [c-dim "  In multi-line mode, press Enter twice to submit." c-reset]
-    print rejoin [c-dim "  Prefix with " c-reset c-bright-cyan "///" c-reset c-dim " (triple slash) for multi-line (one-shot)." c-reset]
+    print rejoin [c-bright-cyan "  /bg" c-reset c-dim "             Send current session to background, start new" c-reset]
+    print rejoin [c-bright-cyan "  /bg /list" c-reset c-dim "       List all sessions with status" c-reset]
+    print rejoin [c-bright-cyan "  /bg <N>" c-reset c-dim "         Resume session #N to foreground" c-reset]
+    print rejoin [c-bright-cyan "  /bg /drop <N>" c-reset c-dim "   Drop session #N" c-reset]
+    print rejoin [c-bright-cyan "  /bg /help" c-reset c-dim "       Show this help" c-reset]
+    print ""
+    print rejoin [c-dim "  States: " c-reset
+                  c-yellow "running" c-reset c-dim " | " c-reset
+                  c-green "done" c-reset c-dim " | " c-reset
+                  c-dim "idle" c-reset c-dim " | " c-reset
+                  c-dim "cancelled" c-reset c-dim " | " c-reset
+                  c-red "error" c-reset]
+    print rejoin [c-dim "  Max background sessions: " c-reset c-bright-white to-string MAX-BACKGROUND-SESSIONS c-reset]
     print ""
 ]
 
@@ -144,31 +152,83 @@ show-config: func [] [
     print ""
 ]
 
-show-history: func [] [
+show-history: func [/local active count][
+    active: session-manager/get-active
     count: 0
-    foreach msg cli-state/conversation [
-        role: select msg 'role
-        if role <> "system" [count: count + 1]
+    if active [
+        foreach msg active/conversation [
+            if (select msg 'role) <> "system" [count: count + 1]
+        ]
     ]
     print ""
-    print rejoin [c-dim "  Conversation: " c-reset c-bright-white to-string count c-reset c-dim " messages, " c-reset
-                  c-bright-white to-string cli-state/turn-count c-reset c-dim " agent turns" c-reset]
+    print rejoin [c-dim "  Session: " c-reset c-bright-white either active [copy/part active/id 8]["none"] c-reset
+                  c-dim " | Messages: " c-reset c-bright-white to-string count c-reset
+                  c-dim " | Turns: " c-reset c-bright-white to-string cli-state/turn-count c-reset]
     print ""
 ]
 
 ; ═══════════════════════════════════════════════════════════
-;  Tool Call Display (pretty)
+;  Session Display
 ; ═══════════════════════════════════════════════════════════
 
-display-tool-call: func [fn-name [string!] args [map!] /local args-str] [
+show-session-list: func [/local rows active active-id state-color][
+    session-manager/poll-backgrounds
+    rows: session-manager/format-list
+    active: session-manager/get-active
+    active-id: either active [active/id][none]
+
+    print ""
+    print rejoin [c-bright-cyan c-bold "  Sessions" c-reset]
+    print rejoin [c-dim "  ────────────────────────────────────────────────────────────────" c-reset]
+    print rejoin [c-dim "  " c-bold
+                  pad/with "  #" 5 #" "
+                  pad/with "ID" 10 #" "
+                  pad/with "State" 12 #" "
+                  pad/with "Created" 10 #" "
+                  "Summary" c-reset]
+    print rejoin [c-dim "  ────────────────────────────────────────────────────────────────" c-reset]
+
+    foreach row rows [
+        slot: row/1
+        id:   row/2
+        st:   row/3
+        tm:   row/4
+        sum:  row/5
+
+        state-color: case [
+            st = "running"   [c-yellow]
+            st = "done"      [c-green]
+            st = "error"     [c-red]
+            st = "active"    [c-bright-green]
+            true             [c-dim]
+        ]
+
+        marker: either st = "active" ["▸ "]["  "]
+
+        print rejoin [
+            "  " c-dim marker c-reset
+            c-dim pad/with to-string slot 3 #" " c-reset " "
+            c-dim pad/with id 8 #" " c-reset " "
+            state-color pad/with st 10 #" " c-reset " "
+            c-dim pad/with tm 8 #" " c-reset " "
+            c-dim sum c-reset
+        ]
+    ]
+    print ""
+    print rejoin [c-dim "  Total: " c-reset c-bright-white to-string length? rows c-reset c-dim " session(s)" c-reset]
+    print ""
+]
+
+; ═══════════════════════════════════════════════════════════
+;  Tool Call Display
+; ═══════════════════════════════════════════════════════════
+
+display-tool-call: func [fn-name [string!] args [map!] /local args-str parts][
     args-str: either empty? args [""][
-        ; Format args nicely
         parts: copy []
         foreach [k v] args [
             val: either string? v [
-                either (length? v) > 60 [
-                    rejoin [copy/part v 60 "..."]
-                ][v]
+                either (length? v) > 60 [rejoin [copy/part v 60 "..."]][v]
             ][mold v]
             append parts rejoin [to-string k "=" val]
         ]
@@ -179,7 +239,7 @@ display-tool-call: func [fn-name [string!] args [map!] /local args-str] [
                   either empty? args-str [""][rejoin [c-dim " (" args-str ")" c-reset]]]
 ]
 
-display-tool-result: func [result [string!] /local short] [
+display-tool-result: func [result [string!] /local short][
     short: either (length? result) > 300 [
         rejoin [copy/part result 300 c-dim "...(truncated)" c-reset]
     ][result]
@@ -196,39 +256,29 @@ display-tool-error: func [result [string!]] [
 
 run-agent-turn: func [
     messages [block!]
-    /local content tool-calls response msg text result fn-data fn-name fn-args fn-args-json tc
+    /local content tool-calls response msg
 ][
-    ; Initialize
     content: copy ""
     tool-calls: copy []
 
-    ; Show thinking indicator
     print ""
     print rejoin [c-dim "  ⏳ Thinking..." c-reset]
 
-    ; Stream with callback
     response: llm-client/chat-stream/with-tools messages func [token [string!]] [
-        case [
-            string? token [
-                ; First token: clear thinking line and show response prefix
-                if empty? content [
-                    ; Move up one line and clear it
-                    prin "^[[1A^[[2K"
-                    prin rejoin [c-bright-white c-bold "  ▸ " c-reset]
-                ]
-                append content token
-                prin token
+        if string? token [
+            if empty? content [
+                prin "^[[1A^[[2K"
+                prin rejoin [c-bright-white c-bold "  ▸ " c-reset]
             ]
+            append content token
+            prin token
         ]
     ] registry/specs
 
-    ; Newline after streaming
     if not empty? content [print ""]
 
-    ; Check errors
     unless map? response [return none]
 
-    ; Build message
     msg: make map! reduce [
         to-set-word 'role {assistant}
         to-set-word 'content any [select response 'content  ""]
@@ -239,40 +289,69 @@ run-agent-turn: func [
 ]
 
 ; ═══════════════════════════════════════════════════════════
+;  Get Current Conversation (from session manager)
+; ═══════════════════════════════════════════════════════════
+
+get-conversation: func [/local active][
+    active: session-manager/get-active
+    either active [active/conversation][copy []]
+]
+
+set-conversation: func [conv [block!] /local active][
+    active: session-manager/get-active
+    if active [active/conversation: conv]
+]
+
+; ═══════════════════════════════════════════════════════════
 ;  Process a User Message
 ; ═══════════════════════════════════════════════════════════
 
-process-user-input: func [user-text [string!] /local user-msg msg tool-calls text fn-data fn-name fn-args fn-args-json result tc tool-msg done-msg] [
-    ; Add user message to conversation
+process-user-input: func [
+    user-text [string!]
+    /local active conversation user-msg msg tool-calls text
+    fn-data fn-name fn-args fn-args-json result tc tool-msg
+][
+    active: session-manager/get-active
+    unless active [
+        print rejoin [c-red "  ✗ No active session. Use /new to create one." c-reset]
+        return
+    ]
+
+    ; Update summary if this is the first user message
+    if empty? active/summary [
+        active/summary: copy/part user-text 60
+    ]
+
+    conversation: active/conversation
+
+    ; Add user message
     user-msg: make map! reduce [
         to-set-word 'role {user}
         to-set-word 'content user-text
     ]
-    append/only cli-state/conversation user-msg
+    append/only conversation user-msg
 
-    ; Agent loop (handles tool calls)
+    ; Agent loop
     repeat turn config/max-turns [
         cli-state/turn-count: cli-state/turn-count + 1
 
-        ; Call LLM
-        msg: run-agent-turn cli-state/conversation
+        msg: run-agent-turn conversation
         unless msg [
             print rejoin [c-red "  ✗ LLM call failed — check API key and endpoint." c-reset]
             return
         ]
 
-        ; Add assistant message
-        append/only cli-state/conversation msg
+        append/only conversation msg
 
         text: any [select msg 'content  ""]
         tool-calls: any [select msg 'tool_calls  []]
 
-        ; If no tool calls, we're done
         if empty? tool-calls [
+            ; Save conversation
+            session-manager/save-session active
             return
         ]
 
-        ; Process tool calls
         foreach tc tool-calls [
             fn-data: select tc 'function
             either map? fn-data [
@@ -285,7 +364,6 @@ process-user-input: func [user-text [string!] /local user-msg msg tool-calls tex
 
                 display-tool-call fn-name fn-args
 
-                ; Resolve relative paths
                 if all [
                     string? fn-name
                     find fn-name {file}
@@ -316,20 +394,253 @@ process-user-input: func [user-text [string!] /local user-msg msg tool-calls tex
                     to-set-word 'content {[Tool error: missing function object]}
                 ]
             ]
-            append/only cli-state/conversation tool-msg
+            append/only conversation tool-msg
+        ]
+
+        ; Save after tool calls
+        session-manager/save-session active
+    ]
+
+    print rejoin [c-yellow "  ⏱ Max turns (" config/max-turns ") reached." c-reset]
+    session-manager/save-session active
+]
+
+; ═══════════════════════════════════════════════════════════
+;  /bg Command Handler
+; ═══════════════════════════════════════════════════════════
+
+handle-bg-command: func [args [string!] /local parts subcmd num result bg-sessions][
+    args: trim args
+    parts: split args " "
+    subcmd: either empty? args [none][parts/1]
+
+    case [
+        ; /bg (no args) — send current to background
+        any [none? subcmd  empty? subcmd] [
+            ; Start background worker for current session
+            result: start-background-worker
+            either result [
+                print rejoin [c-green "  ✓ Session sent to background: " c-reset
+                              c-bright-white copy/part result 8 c-reset]
+                ; Create new foreground
+                session-manager/fresh
+                cli-state/turn-count: 0
+                init-foreground-session
+                print rejoin [c-dim "  New foreground session: " c-reset
+                              c-bright-white copy/part (session-manager/get-active)/id 8 c-reset]
+            ][
+                print rejoin [c-red "  ✗ Failed to start background worker." c-reset]
+            ]
+        ]
+
+        ; /bg /list
+        subcmd = "/list" [
+            show-session-list
+        ]
+
+        ; /bg /drop <N>
+        subcmd = "/drop" [
+            num: attempt [to-integer parts/2]
+            either num [
+                result: session-manager/drop num
+                print rejoin [c-dim "  " result c-reset]
+            ][
+                print rejoin [c-red "  Usage: /bg /drop <N>" c-reset]
+            ]
+        ]
+
+        ; /bg /help
+        subcmd = "/help" [
+            show-bg-help
+        ]
+
+        ; /bg <N> — resume session N
+        true [
+            num: attempt [to-integer subcmd]
+            either num [
+                result: session-manager/resume num
+                either block? result [
+                    resumed: result/1
+                    old: result/2
+                    print rejoin [c-green "  ✓ Resumed session #" num " " c-reset
+                                  c-bright-white copy/part resumed/id 8 c-reset
+                                  c-dim " (state: " to-string resumed/state ")" c-reset]
+                    if old [
+                        print rejoin [c-dim "  Previous active sent to bg" c-reset]
+                    ]
+                    ; Show summary
+                    if resumed/summary [
+                        print rejoin [c-dim "  Summary: " c-reset resumed/summary]
+                    ]
+                    ; Load conversation into display
+                    cli-state/turn-count: 0
+                    ; Print last few messages for context
+                    show-session-context resumed
+                ][
+                    print rejoin [c-red "  ✗ " result c-reset]
+                ]
+            ][
+                print rejoin [c-red "  Usage: /bg <N> or /bg /list or /bg /drop <N>" c-reset]
+            ]
+        ]
+    ]
+]
+
+; ═══════════════════════════════════════════════════════════
+;  Start Background Worker
+; ═══════════════════════════════════════════════════════════
+
+start-background-worker: func [
+    /local active sid prompt cmd script-path log-path
+][
+    active: session-manager/get-active
+    unless active [return none]
+
+    sid: active/id
+
+    ; Find the last user message as prompt
+    prompt: ""
+    foreach msg active/conversation [
+        if (select msg 'role) = "user" [
+            prompt: select msg 'content
         ]
     ]
 
-    ; Max turns reached
-    print rejoin [c-yellow "  ⏱ Max turns (" config/max-turns ") reached." c-reset]
+    ; Save current state
+    active/state: 'running
+    session-manager/save-session active
+
+    ; Build command to spawn worker
+    script-path: to-string clean-path %./re-coder-bg-worker.reb
+    log-path: rejoin [to-string session-manager/session-dir sid "worker.log"]
+
+    cmd: rejoin [
+        "cd " to-string what-dir " && "
+        "nohup rebol3 " script-path
+        " --session-id " sid
+        " " mold prompt
+        " > " log-path " 2>&1 &"
+    ]
+
+    ; Spawn non-blocking
+    call/shell cmd
+
+    ; Give it a moment to start
+    wait 0:0:0.5
+
+    ; Read PID from state file (worker writes it)
+    attempt [
+        state-file: rejoin [to-string session-manager/session-dir sid "/state.json"]
+        state-map: try [load-json read to-rebol-file state-file]
+        if map? state-map [
+            active/process-id: select state-map 'process-id
+        ]
+    ]
+
+    sid
+]
+
+; ═══════════════════════════════════════════════════════════
+;  Show Session Context (when resuming)
+; ═══════════════════════════════════════════════════════════
+
+show-session-context: func [session /local conv msg role content tool-calls][
+    conv: session/conversation
+    unless block? conv [return]
+
+    print ""
+    print rejoin [c-dim "  ── Session Context ──" c-reset]
+
+    ; Show last few messages
+    shown: 0
+    foreach msg conv [
+        role: select msg 'role
+        if role = "system" [continue]
+
+        content: any [select msg 'content  ""]
+        tool-calls: any [select msg 'tool_calls  []]
+
+        case [
+            role = "user" [
+                print ""
+                print rejoin [c-bright-cyan "  ❯ " c-reset content]
+            ]
+            role = "assistant" [
+                unless empty? content [
+                    print rejoin [c-bright-white "  ▸ " c-reset
+                                  either (length? content) > 200 [
+                                      rejoin [copy/part content 200 c-dim "..." c-reset]
+                                  ][content]]
+                ]
+                unless empty? tool-calls [
+                    foreach tc tool-calls [
+                        fn-data: select tc 'function
+                        if map? fn-data [
+                            print rejoin [c-yellow "  🔧 " select fn-data 'name c-reset]
+                        ]
+                    ]
+                ]
+            ]
+            role = "tool" [
+                result: any [select msg 'content ""]
+                short: either (length? result) > 100 [
+                    rejoin [copy/part result 100 c-dim "..." c-reset]
+                ][result]
+                print rejoin [c-green "  ✓ " c-reset c-dim short c-reset]
+            ]
+        ]
+        shown: shown + 1
+    ]
+
+    ; Show output log if available
+    if session/output-log [
+        unless empty? session/output-log [
+            print ""
+            print rejoin [c-dim "  ── Background Output ──" c-reset]
+            ; Show last 500 chars
+            log: session/output-log
+            either (length? log) > 500 [
+                print rejoin [c-dim "  ..." copy/part skip log ((length? log) - 500) 500 c-reset]
+            ][
+                print rejoin [c-dim "  " log c-reset]
+            ]
+        ]
+    ]
+
+    print rejoin [c-dim "  ─────────────────────" c-reset]
+    print ""
+]
+
+; ═══════════════════════════════════════════════════════════
+;  Initialize Foreground Session
+; ═══════════════════════════════════════════════════════════
+
+init-foreground-session: func [/local active][
+    active: session-manager/get-active
+    unless active [
+        ; Create initial session
+        session-manager/create "Initial session" copy []
+        session-manager/set-active session-manager/slot-order/1
+        active: session-manager/get-active
+    ]
+
+    ; Ensure system prompt
+    if empty? active/conversation [
+        sys-msg: make map! reduce [
+            to-set-word 'role {system}
+            to-set-word 'content system-prompt
+        ]
+        append/only active/conversation sys-msg
+    ]
+
+    session-manager/save-session active
 ]
 
 ; ═══════════════════════════════════════════════════════════
 ;  Command Handler
 ; ═══════════════════════════════════════════════════════════
 
-handle-command: func [cmd [string!] /local parts arg] [
-    ; Trim and lowercase
+handle-command: func [cmd [string!] /local parts arg command active result][
     cmd: trim cmd
     parts: split cmd " "
     command: first parts
@@ -340,7 +651,11 @@ handle-command: func [cmd [string!] /local parts arg] [
         "/quit"    [cli-state/running: false  print rejoin [c-dim "  Goodbye!" c-reset]]
         "/exit"    [cli-state/running: false  print rejoin [c-dim "  Goodbye!" c-reset]]
         "/clear"   [
-            clear cli-state/conversation
+            active: session-manager/get-active
+            if active [
+                clear active/conversation
+                init-foreground-session
+            ]
             cli-state/turn-count: 0
             print rejoin [c-green "  ✓ Conversation cleared." c-reset]
         ]
@@ -374,6 +689,30 @@ handle-command: func [cmd [string!] /local parts arg] [
                           either config/stream-mode [rejoin [c-green "ON"]][rejoin [c-yellow "OFF"]]
                           c-reset]
         ]
+
+        ; ── Session commands ──
+        "/bg"      [handle-bg-command any [arg ""]]
+        "/sessions" [show-session-list]
+        "/fork"    [
+            result: session-manager/fork
+            either object? result [
+                cli-state/turn-count: 0
+                print rejoin [c-green "  ✓ Forked session: " c-reset
+                              c-bright-white copy/part result/id 8 c-reset
+                              c-dim " (copy of previous context)" c-reset]
+                init-foreground-session
+            ][
+                print rejoin [c-red "  ✗ " result c-reset]
+            ]
+        ]
+        "/new"     [
+            session-manager/fresh
+            cli-state/turn-count: 0
+            init-foreground-session
+            active: session-manager/get-active
+            print rejoin [c-green "  ✓ New session: " c-reset
+                          c-bright-white copy/part active/id 8 c-reset]
+        ]
     ][
         print rejoin [c-red "  Unknown command: " command c-reset
                       c-dim "  Type /help for available commands" c-reset]
@@ -384,11 +723,14 @@ handle-command: func [cmd [string!] /local parts arg] [
 ;  Prompt
 ; ═══════════════════════════════════════════════════════════
 
-show-prompt: func [] [
+show-prompt: func [/local active sid-bg][
+    active: session-manager/get-active
+    sid-bg: either active [rejoin [c-dim "[" copy/part active/id 4 "]" c-reset]][""]
+
     either cli-state/multi-line [
         prin rejoin [c-bright-cyan "  ... " c-reset]
     ][
-        prin rejoin [c-bright-cyan "  ❯ " c-reset]
+        prin rejoin [sid-bg " " c-bright-cyan "❯ " c-reset]
     ]
 ]
 
@@ -396,7 +738,7 @@ show-prompt: func [] [
 ;  Multi-line Input
 ; ═══════════════════════════════════════════════════════════
 
-read-multiline: func [/local lines line] [
+read-multiline: func [/local lines line][
     lines: copy []
     print rejoin [c-dim "  Multi-line mode. Press Enter on empty line to submit." c-reset]
     forever [
@@ -404,7 +746,6 @@ read-multiline: func [/local lines line] [
         line: input
         either empty? trim line [
             either empty? lines [
-                ; Double empty = cancel
                 print rejoin [c-dim "  (cancelled)" c-reset]
                 return none
             ][
@@ -416,11 +757,7 @@ read-multiline: func [/local lines line] [
     ]
 ]
 
-; ═══════════════════════════════════════════════════════════
-;  One-shot Triple-slash Multi-line
-; ═══════════════════════════════════════════════════════════
-
-read-triple-slash: func [/local lines line] [
+read-triple-slash: func [/local lines line][
     lines: copy []
     print rejoin [c-dim "  Multi-line input (end with empty line):" c-reset]
     forever [
@@ -438,16 +775,15 @@ read-triple-slash: func [/local lines line] [
 ;  Main REPL Loop
 ; ═══════════════════════════════════════════════════════════
 
-main-loop: func [/local user-input] [
+main-loop: func [/local user-input][
     ; Initialize agent
     code-agent/init
 
-    ; Initialize conversation with system prompt
-    sys-msg: make map! reduce [
-        to-set-word 'role {system}
-        to-set-word 'content system-prompt
-    ]
-    append/only cli-state/conversation sys-msg
+    ; Load existing sessions from disk
+    session-manager/load-all
+
+    ; Initialize or restore foreground session
+    init-foreground-session
 
     cli-state/session-start: now
 
@@ -455,10 +791,8 @@ main-loop: func [/local user-input] [
     while [cli-state/running] [
         show-prompt
 
-        ; Read input
         user-input: attempt [input]
 
-        ; Handle EOF / Ctrl-D
         unless user-input [
             print ""
             print rejoin [c-dim "  Goodbye!" c-reset]
@@ -467,32 +801,23 @@ main-loop: func [/local user-input] [
 
         user-input: trim user-input
 
-        ; Skip empty
         if empty? user-input [continue]
 
-        ; Check for triple-slash multi-line
         if user-input = "///" [
             user-input: read-triple-slash
             unless user-input [continue]
         ]
 
-        ; Commands
         if (first user-input) = #"/" [
-            either find user-input " " [
-                handle-command user-input
-            ][
-                handle-command user-input
-            ]
+            handle-command user-input
             continue
         ]
 
-        ; Multi-line mode
         if cli-state/multi-line [
             user-input: read-multiline
             unless user-input [continue]
         ]
 
-        ; Process
         process-user-input user-input
     ]
 ]
@@ -501,14 +826,10 @@ main-loop: func [/local user-input] [
 ;  CLI Argument Parsing
 ; ═══════════════════════════════════════════════════════════
 
-parse-cli-args: func [/local args i arg prompt-parts prompt] [
+parse-cli-args: func [/local args i arg prompt-parts prompt][
     args: system/options/args
-    unless args [
-        ; No args = interactive mode
-        return none
-    ]
+    unless args [return none]
 
-    ; Parse flags
     prompt-parts: copy []
     i: 1
     while [i <= length? args] [
@@ -526,12 +847,8 @@ parse-cli-args: func [/local args i arg prompt-parts prompt] [
                 i: i + 1
                 if i <= length? args [config/work-dir: to-rebol-file pick args i]
             ]
-            "--stream" [
-                config/stream-mode: true
-            ]
-            "--no-stream" [
-                config/stream-mode: false
-            ]
+            "--stream"    [config/stream-mode: true]
+            "--no-stream" [config/stream-mode: false]
             "--help" "-h" [
                 print {Usage: rebol3 re-coder-cli.reb [options] [prompt]}
                 print {}
@@ -544,6 +861,14 @@ parse-cli-args: func [/local args i arg prompt-parts prompt] [
                 print {}
                 print {If prompt is provided, runs in one-shot mode.}
                 print {Otherwise, enters interactive REPL.}
+                print {}
+                print {Session Commands (in REPL):}
+                print {  /bg               Send current session to background}
+                print {  /bg /list         List all sessions}
+                print {  /bg <N>           Resume session N}
+                print {  /bg /drop <N>     Drop session N}
+                print {  /fork             Fork current session}
+                print {  /new              Start fresh session}
                 quit/return 0
             ]
         ][
@@ -552,7 +877,6 @@ parse-cli-args: func [/local args i arg prompt-parts prompt] [
         i: i + 1
     ]
 
-    ; If prompt provided, run one-shot
     unless empty? prompt-parts [
         prompt: join-items prompt-parts " "
         return reduce ['one-shot prompt]
@@ -565,15 +889,13 @@ parse-cli-args: func [/local args i arg prompt-parts prompt] [
 ;  Entry Point
 ; ═══════════════════════════════════════════════════════════
 
-main: func [/local mode prompt] [
-    ; Check API key
+main: func [/local mode prompt][
     unless config/api-key [
         print rejoin [c-red "  ❌ DEEPSEEK_API_KEY environment variable not set." c-reset]
         print rejoin [c-dim "  Usage: DEEPSEEK_API_KEY=*** rebol3 re-coder-cli.reb" c-reset]
         quit/return 1
     ]
 
-    ; Parse args
     mode: parse-cli-args
 
     either mode [
@@ -584,6 +906,9 @@ main: func [/local mode prompt] [
         print rejoin [c-bright-white "  " prompt c-reset]
         print ""
         code-agent/init
+        session-manager/create "One-shot task" copy []
+        session-manager/set-active session-manager/slot-order/1
+        init-foreground-session
         process-user-input prompt
     ][
         ; Interactive mode
@@ -592,5 +917,4 @@ main: func [/local mode prompt] [
     ]
 ]
 
-; === Bootstrap ===
 main

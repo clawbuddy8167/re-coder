@@ -12,6 +12,8 @@ Tested with [Rebol3](https://github.com/Oldes/Rebol3) (`rebol3-bulk-macos-arm64`
 re-coder-ai/
 ├── re-coder-agent.reb              ← main agent script
 ├── re-coder-cli.reb                ← interactive CLI (REPL)
+├── re-coder-bg-worker.reb          ← background worker process
+├── session-manager.reb             ← multi-session management
 ├── re-coder                        ← launcher script (chmod +x)
 ├── re-coder-rag-search.reb         ← RAG search/retrieval (grep/rg + optional LLM)
 ├── test-re-coder-rag-search.reb    ← RAG search tests (21 tests)
@@ -69,7 +71,18 @@ DEEPSEEK_API_KEY=*** ./re-coder "Write a Python web scraper"
 DEEPSEEK_API_KEY=*** ./re-coder --model deepseek-chat "Explain async/await"
 ```
 
-**CLI Commands:**
+**Session Commands:**
+
+| Command | Description |
+|---------|-------------|
+| `/bg` | Send current session to background, start new foreground |
+| `/bg /list` | List all sessions with status |
+| `/bg <N>` | Resume session #N (bidirectional swap) |
+| `/bg /drop <N>` | Drop session #N |
+| `/fork` | Fork current session (copy context) |
+| `/new` | Start a fresh session |
+
+**General Commands:**
 
 | Command | Description |
 |---------|-------------|
@@ -97,6 +110,46 @@ $ ./re-coder
   ✓ Written 1234 bytes to data_utils.py
   🔧 run_command (command=python data_utils.py)
   ✓ (no output)
+```
+
+### Background Sessions (/bg)
+
+Inspired by [auto-coder.chat's /bg](https://zhuhailin.com/zh/blog/bg-multi-session) — run multiple AI tasks in parallel within one terminal.
+
+```bash
+$ ./re-coder
+
+# Start a long task
+  ❯ [abc12345] ❯ Write a comprehensive test suite for my API
+  ⏳ Thinking...
+  ▸ I'll analyze your API and create tests...
+
+# Task is running — send it to background
+  ❯ /bg
+  ✓ Session sent to background: abc12345
+  New foreground session: def67890
+
+# Now do something else in the new foreground
+  ❯ [def67890] ❯ What's the quicksort algorithm?
+  ▸ Quicksort is a divide-and-conquer...
+
+# Check background progress
+  ❯ /bg /list
+  Sessions
+  ────────────────────────────────────
+    #  ID        State      Created   Summary
+  ────────────────────────────────────
+    1  abc12345  running    05-12     Write a comprehensive test suite...
+    2  def67890  active     05-12     What's the quicksort algorithm...
+
+# Resume the background session when done
+  ❯ /bg 1
+  ✓ Resumed session #1 abc12345 (state: done)
+  Summary: Write a comprehensive test suite for my API
+
+# Fork to try a different approach
+  ❯ /fork
+  ✓ Forked session: 789abc12 (copy of previous context)
 ```
 
 `re-coder-rag-search.reb` implements **keyword retrieval** via `grep` or **ripgrep** (`rg`) when available. It is **not** semantic / embedding search: the query string is passed to the shell search tool as the match pattern, so use **tokens that actually appear** in your files (identifiers, comments, doc headings).

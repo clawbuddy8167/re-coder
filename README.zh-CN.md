@@ -12,6 +12,8 @@
 re-coder-ai/
 ├── re-coder-agent.reb              ← 主程序
 ├── re-coder-cli.reb                ← 交互式 CLI (REPL)
+├── re-coder-bg-worker.reb          ← 后台 worker 进程
+├── session-manager.reb             ← 多会话管理
 ├── re-coder                        ← 启动脚本 (chmod +x)
 ├── re-coder-rag-search.reb         ← RAG 检索（grep/rg + 可选 LLM）
 ├── test-re-coder-rag-search.reb    ← 检索测试（21 项）
@@ -41,6 +43,19 @@ DEEPSEEK_API_KEY=*** ./re-coder --model deepseek-chat "解释 async/await"
 ```
 
 **CLI 命令：**
+
+**会话命令：**
+
+| 命令 | 说明 |
+|------|------|
+| `/bg` | 当前会话沉到后台，启动新前台 |
+| `/bg /list` | 列出所有会话及状态 |
+| `/bg <N>` | 召回第 N 号会话（双向交换） |
+| `/bg /drop <N>` | 丢弃第 N 号会话 |
+| `/fork` | 分叉当前会话（复制上下文） |
+| `/new` | 开始全新会话 |
+
+**通用命令：**
 
 | 命令 | 说明 |
 |------|------|
