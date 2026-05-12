@@ -470,7 +470,7 @@ stream-llm-client: make object! [
     base-url: "https://api.deepseek.com"
     
     ; Debug flags
-    print-input: true
+    print-input: false
     print-output: true
     
     ; Stream chat with callback for each token

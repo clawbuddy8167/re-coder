@@ -23,7 +23,7 @@ config: make object! [
     work-dir: %./agent-output/
     max-turns: 20
     response-cutoff: 3000         ; max chars from tool output
-    print-llm-input: true
+    print-llm-input: false
     print-llm-output: true
     ; 0 = print full raw HTTP body; >0 = only first N chars (when print-llm-output)
     llm-raw-output-chars: 10000
