@@ -22,17 +22,17 @@ SESSIONS-DIR: %.re-coder/sessions/
 ; ═══════════════════════════════════════════════════════════
 
 make-session: func [
-    id       [string!]
-    summary  [string!]
-    conversation [block!]
+    sess-id     [string!]
+    summary-str [string!]
+    conv        [block!]   ; object field names shadow args in make object! (id, summary, conversation)
     /state st [word!]
 ][
     make object! [
-        id:           id
+        id:           sess-id
         state:        any [st 'idle]
         created:      now
-        summary:      summary
-        conversation: copy conversation
+        summary:      summary-str
+        conversation: copy conv
         output-log:   copy ""
         process-id:   none   ; OS PID of background worker
         slot:         none   ; slot number when in background
@@ -79,7 +79,7 @@ session-manager: make object! [
     ][
         ensure-dir
         id: gen-id
-        session: make-session/with-state id summary conversation 'idle
+        session: make-session/state id summary conversation 'idle
         session/slot: next-slot
         put sessions id session
         append slot-order id
@@ -92,7 +92,7 @@ session-manager: make object! [
     ]
 
     ; ── Set active (foreground) session ──
-    set-active: func [id [string!] none-ok [logic!] /local session][
+    set-active: func [id [string!] /none-ok /local session][
         session: select sessions id
         unless session [
             either none-ok [return none][
@@ -274,7 +274,7 @@ session-manager: make object! [
             to-string read to-rebol-file output-file
         ][copy ""]
 
-        session: make-session/with-state id
+        session: make-session/state id
             any [select state-map 'summary "untitled"]
             conv
             to-word any [select state-map 'state "idle"]
