@@ -13,6 +13,9 @@ REBOL [
 ;  Load Dependencies
 ; ═══════════════════════════════════════════════════════════
 
+; Prevent agent-stream from auto-running main when loaded as library
+re-coder-as-library: true
+
 do %./re-coder-agent-stream.reb
 do %./session-manager.reb
 do %./async-manager.reb

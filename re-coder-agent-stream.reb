@@ -687,7 +687,7 @@ code-agent: make object! [
                 print [newline {[Done] Agent finished in } turn { turns.}]
                 done-msg: make map! reduce [
                     to-set-word 'role {system}
-                    to-set-word 'content {[Task complete. Report the result to the user in your next response.}]
+                    to-set-word 'content {[Task complete. Report the result to the user in your next response.]}
                 ]
                 append messages done-msg
                 return text
@@ -873,4 +873,5 @@ main: func [] [
 ]
 
 ; === Bootstrap ===
-main
+; Only run main when executed directly, not when loaded as library
+unless value? 're-coder-as-library [main]
