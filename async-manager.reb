@@ -187,7 +187,7 @@ async-manager: make object! [
     load-all: func [/local files mf task-map id task max-n][
         ensure-dirs
         files: attempt [read ASYNC-META-DIR]
-        unless files [return]
+        unless files [return none]
 
         foreach f files [
             if (find to-string f) and (find to-string f ".json") [

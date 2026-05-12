@@ -502,8 +502,8 @@ test-suite "Tool Call Collector" [
 
 test-suite "Curl Command Builder" [
     
-    ; Test building curl command
-    test-build-curl-cmd: does [
+    ; Test building curl argv (block for call native — no shell)
+    test-build-curl-args: does [
         url: "https://api.deepseek.com/v1/chat/completions"
         headers: make map! reduce [
             'Authorization "Bearer sk-test123"
@@ -511,12 +511,13 @@ test-suite "Curl Command Builder" [
         ]
         body: to-json #[
             model: "deepseek-chat"
-            stream: true
+            stream: #(true)
         ]
         
-        cmd: sse-reader/build-curl-cmd url headers body
+        args: sse-reader/build-curl-args url headers body
         
-        assert-string cmd "build-curl-cmd returns string"
+        cmd: mold args
+        assert-string cmd "build-curl-args returns block (molded for asserts)"
         assert-string-contains cmd "-N" "Curl uses -N for no-buffer"
         assert-string-contains cmd "--no-buffer" "Curl uses --no-buffer"
         assert-string-contains cmd "text/event-stream" "Accept header is SSE"
@@ -525,7 +526,7 @@ test-suite "Curl Command Builder" [
     ]
     
     ; Run test
-    test-build-curl-cmd
+    test-build-curl-args
 ]
 
 ; ═══════════════════════════════════════════════════════════

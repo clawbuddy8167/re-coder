@@ -213,6 +213,23 @@ tool-call-collector: make object! [
 ]
 
 ; ═══════════════════════════════════════════════════════════
+;  Resolve curl for pipe:// (often inherits a minimal PATH)
+; ═══════════════════════════════════════════════════════════
+
+curl-executable: func [/local e path][
+    e: get-env "RE_CODER_CURL"
+    if all [string? e  not empty? trim e] [return trim e]
+    foreach path [
+        "/usr/bin/curl"
+        "/bin/curl"
+        "/usr/local/bin/curl"
+    ][
+        if exists? to-rebol-file path [return path]
+    ]
+    "curl"
+]
+
+; ═══════════════════════════════════════════════════════════
 ;  SSE Stream Reader
 ;
 ;  Core streaming HTTP client using curl
@@ -236,54 +253,95 @@ sse-reader: make object! [
         partial-line: copy ""
     ]
     
-    ; Build curl command for SSE streaming
-    build-curl-cmd: func [
+    ; Build argv for call/wait/output (block — no shell; avoids quoting bugs).
+    ; See Rebol3 `call` native: block = pre-split args; file! on /output = write to path.
+    build-curl-args: func [
         url     [url! string!]
         headers [map!]
-        body    [string!]
-        /local cmd auth-h ct-h
+        body    [string! file!]
+        /local auth-h ct-h exe exe-arg data-arg bf
     ][
         auth-h: select headers 'Authorization
         ct-h: any [select headers 'Content-Type "application/json"]
-        
-        rejoin [
-            {curl -N --no-buffer }
-            {--connect-timeout } config/connect-timeout { }
-            {--max-time } config/max-time { }
-            {-X POST }
-            {-H "Content-Type: } ct-h {" }
-            {-H "Authorization: } auth-h {" }
-            {-H "Accept: text/event-stream" }
-            {-d '} body {' }
-            url
+        exe: curl-executable
+        exe-arg: either all [string? exe  find exe "/"] [to-rebol-file exe][exe]
+        data-arg: either file? body [
+            rejoin ["@" to-local-file clean-path body]
+        ][
+            bf: clean-path %./.hermes-sse-inline-body.tmp
+            write bf body
+            rejoin ["@" to-local-file bf]
+        ]
+        reduce [
+            exe-arg "-s" "-N" "--no-buffer"
+            "--connect-timeout" to-string config/connect-timeout
+            "--max-time" to-string config/max-time
+            "-X" "POST"
+            "-H" rejoin ["Content-Type: " ct-h]
+            "-H" auth-h
+            "-H" "Accept: text/event-stream"
+            "-d" data-arg
+            to-string url
         ]
     ]
     
+    ; One SSE line from the wire (after "data: " prefix handling is inside)
+    apply-one-sse-line: func [
+        line     [string!]
+        callback [function!]
+        result   [map!]
+        /local data-str parsed delta usage finish p
+    ][
+        replace/all line #"^M" ""
+        line: trim line
+        if empty? line [return false]
+        if (first line) = #";" [return false]
+        unless find line "data:" [return false]
+        ; After "data:" optional single space (OpenAI: "data: ", some stacks: "data:")
+        p: find line {data:}
+        data-str: trim copy either p [skip p 5][skip line 5]
+        if (first data-str) = #" " [data-str: next data-str]
+        data-str: trim data-str
+        replace/all data-str #"^M" ""
+        if data-str = {[DONE]} [
+            callback "DONE"
+            return true
+        ]
+        if empty? data-str [return false]
+        parsed: attempt [load-json data-str]
+        unless map? parsed [return false]
+        delta: sse-chunk-extractor/extract-delta parsed
+        case [
+            string? delta [
+                append result/content delta
+                callback delta
+            ]
+            block? delta [
+                if equal? first delta 'tool_calls [
+                    tool-call-collector/update second delta
+                ]
+            ]
+        ]
+        usage: sse-chunk-extractor/extract-usage parsed
+        if usage [put result 'usage usage]
+        finish: sse-chunk-extractor/extract-finish-reason parsed
+        if finish [put result 'finish_reason finish]
+        false
+    ]
+
     ; Read SSE stream with callback
+    ; body: JSON string, or file! (recommended: temp file; curl uses -d @path)
     ; callback receives: [map! chunk | "DONE" | string! error]
     ; Returns: collected full response map
     read-stream: func [
         url      [url! string!]
         headers  [map!]
-        body     [string!]
+        body     [string! file!]
         callback [function!]
-        /local cmd port chunk chunks result usage
+        /local args out-file err-file e shell-text err-text newline-pos line result
     ][
         reset
         
-        cmd: build-curl-cmd url headers body
-        
-        ; Open pipe to curl
-        port: attempt [
-            open/direct/binary rejoin [pipe:// cmd]
-        ]
-        
-        unless port [
-            callback "ERROR: Failed to start curl process"
-            return none
-        ]
-        
-        ; Initialize result accumulator
         result: make map! reduce [
             'id ""
             'role "assistant"
@@ -293,94 +351,58 @@ sse-reader: make object! [
             'finish_reason none
         ]
         
-        ; Initialize tool call collector
         tool-call-collector/reset
         
-        ; Read loop
-        while [true] [
-            chunk: attempt [copy/part port config/buffer-size]
-            
-            unless chunk [
-                ; End of stream or error
-                break
-            ]
-            
-            if empty? chunk [continue]
-            
-            ; Append to buffer
-            append buffer to-string chunk
-            
-            ; Process complete lines
-            while [newline-pos: find buffer newline] [
-                line: copy/part buffer newline-pos
-                buffer: copy next newline-pos
-                
-                ; Handle partial lines from previous read
-                if not empty? partial-line [
-                    line: rejoin [partial-line line]
-                    partial-line: copy ""
-                ]
-                
-                ; Skip empty lines (SSE event separators)
-                if empty? trim/with line whitespace [continue]
-                
-                ; Skip SSE comments
-                if (first line) = #";" [continue]
-                
-                ; Parse SSE data line
-                if find line "data: " [
-                    data-str: copy/part skip line 6 tail line
-                    
-                    ; Check for [DONE]
-                    if data-str = "[DONE]" [
-                        callback "DONE"
-                        break
-                    ]
-                    
-                    ; Parse JSON chunk
-                    parsed: attempt [load-json data-str]
-                    if map? parsed [
-                        ; Extract content
-                        delta: sse-chunk-extractor/extract-delta parsed
-                        case [
-                            string? delta [
-                                append result/content delta
-                                callback delta  ; Stream text to callback
-                            ]
-                            block? delta [
-                                ; Tool calls delta
-                                if equal? first delta 'tool_calls [
-                                    tool-call-collector/update second delta
-                                ]
-                            ]
-                        ]
-                        
-                        ; Extract usage (last chunk)
-                        usage: sse-chunk-extractor/extract-usage parsed
-                        if usage [
-                            put result 'usage usage
-                        ]
-                        
-                        ; Extract finish reason
-                        finish: sse-chunk-extractor/extract-finish-reason parsed
-                        if finish [
-                            put result 'finish_reason finish
-                        ]
-                    ]
-                ]
-            ]
-            
-            ; Save any remaining partial line
-            if not empty? buffer [
-                partial-line: copy buffer
-                buffer: copy ""
-            ]
+        out-file: clean-path %./.hermes-sse-out.tmp
+        err-file: clean-path %./.hermes-sse-err.tmp
+        attempt [delete out-file]
+        attempt [delete err-file]
+        
+        args: build-curl-args url headers body
+        
+        ; Rebol3: block argv + file /output avoids shell quoting and broken pipe:// drivers
+        e: try [call/wait/output/error args out-file err-file]
+        if error? e [
+            callback rejoin ["ERROR: " mold e]
+            attempt [delete clean-path %./.hermes-sse-inline-body.tmp]
+            return none
         ]
         
-        ; Close port
-        attempt [close port]
+        shell-text: attempt [to-string read out-file]
+        if not string? shell-text [shell-text: copy ""]
         
-        ; Collect tool calls
+        err-text: attempt [to-string read err-file]
+        if not string? err-text [err-text: copy ""]
+        
+        attempt [delete out-file]
+        attempt [delete err-file]
+        if string? body [attempt [delete clean-path %./.hermes-sse-inline-body.tmp]]
+        
+        if all [not empty? err-text  empty? shell-text] [
+            callback rejoin ["ERROR: curl: " copy/part err-text 500]
+            return none
+        ]
+        
+        if empty? shell-text [
+            callback {ERROR: empty response from API (check URL, API key, network).}
+            return none
+        ]
+        
+        buffer: shell-text
+        partial-line: copy ""
+        while [newline-pos: find buffer newline] [
+            line: copy/part buffer newline-pos
+            buffer: copy next newline-pos
+            if not empty? partial-line [
+                line: rejoin [partial-line line]
+                partial-line: copy ""
+            ]
+            if apply-one-sse-line line :callback result [break]
+        ]
+        if not empty? buffer [
+            apply-one-sse-line buffer :callback result
+        ]
+        
         if tool-call-collector/has-calls [
             put result 'tool_calls tool-call-collector/get-calls
         ]
@@ -404,13 +426,13 @@ http-post-stream: func [
 ][
     ; Ensure stream: true in payload
     unless select payload 'stream [
-        put payload 'stream true
+        put payload 'stream #(true)
     ]
     
     ; Add stream_options for usage tracking
     unless select payload 'stream_options [
         put payload 'stream_options #[
-            include_usage: true
+            include_usage: #(true)
         ]
     ]
     
@@ -421,12 +443,12 @@ http-post-stream: func [
         return none
     ]
     
-    ; Write to temp file to avoid shell quoting issues
-    tmpfile: %./.hermes-sse-body.tmp
+    ; Write to temp file (absolute path helps curl when cwd differs)
+    tmpfile: clean-path %./.hermes-sse-body.tmp
     write tmpfile body
     
-    ; Read stream
-    result: sse-reader/read-stream url headers body callback
+    ; Read stream (pass file so curl uses -d @file — avoids quoting/length issues)
+    result: sse-reader/read-stream url headers tmpfile :callback
     
     ; Cleanup temp file
     attempt [delete tmpfile]
@@ -465,9 +487,9 @@ stream-llm-client: make object! [
         payload: make map! reduce [
             to-set-word 'model model
             to-set-word 'messages messages
-            to-set-word 'stream true
+            to-set-word 'stream #(true)
             to-set-word 'stream_options #[
-                include_usage: true
+                include_usage: #(true)
             ]
         ]
         
@@ -491,7 +513,7 @@ stream-llm-client: make object! [
         ]
         
         ; Execute streaming request
-        result: http-post-stream url payload headers callback
+        result: http-post-stream url payload headers :callback
         
         ; Debug output
         if all [print-output  map? result] [

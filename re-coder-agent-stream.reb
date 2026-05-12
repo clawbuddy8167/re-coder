@@ -258,9 +258,9 @@ llm-client: make object! [
         payload: make map! reduce [
             to-set-word 'model config/model
             to-set-word 'messages messages
-            to-set-word 'stream true
+            to-set-word 'stream #(true)
             to-set-word 'stream_options #[
-                include_usage: true
+                include_usage: #(true)
             ]
         ]
 
@@ -281,7 +281,7 @@ llm-client: make object! [
             print {──────────────────────────}
         ]
 
-        http-post-stream url payload headers callback
+        http-post-stream url payload headers :callback
     ]
 ]
 

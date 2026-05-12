@@ -294,7 +294,7 @@ session-manager: make object! [
     load-all: func [/local dirs id session max-slot][
         ensure-dir
         dirs: attempt [read SESSIONS-DIR]
-        unless dirs [return]
+        unless dirs [return none]
 
         max-slot: 0
         foreach dir dirs [
@@ -315,7 +315,7 @@ session-manager: make object! [
     ; ── Update session output (called by background worker) ──
     append-output: func [id [string!] text [string!] /local session output-file dir][
         session: select sessions id
-        unless session [return]
+        unless session [return none]
 
         append session/output-log text
 
@@ -328,7 +328,7 @@ session-manager: make object! [
     ; ── Update session state ──
     set-state: func [id [string!] st [word!] /local session][
         session: select sessions id
-        unless session [return]
+        unless session [return none]
         session/state: st
         save-session session
     ]

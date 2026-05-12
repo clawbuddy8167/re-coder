@@ -281,6 +281,11 @@ run-agent-turn: func [
 
     response: llm-client/chat-stream/with-tools messages func [token [string!]] [
         if string? token [
+            if token = "DONE" [return]
+            if all [(length? token) >= 6  "ERROR:" = copy/part token 6] [
+                print rejoin [c-red "  " token c-reset]
+                return
+            ]
             if empty? content [
                 prin "^[[1A^[[2K"
                 prin rejoin [c-bright-white c-bold "  ▸ " c-reset]
@@ -288,11 +293,18 @@ run-agent-turn: func [
             append content token
             prin token
         ]
-    ] registry/specs
+    ] code-agent/registry/specs
 
     if not empty? content [print ""]
 
     unless map? response [return none]
+
+    ; Shell / buffered path: tokens may not stream to callback; still print full text once
+    text-from-api: any [select response 'content ""]
+    if all [not empty? text-from-api  empty? content] [
+        prin "^[[1A^[[2K"
+        print rejoin [c-bright-white c-bold "  ▸ " c-reset text-from-api]
+    ]
 
     msg: make map! reduce [
         to-set-word 'role {assistant}
@@ -329,7 +341,7 @@ process-user-input: func [
     active: session-manager/get-active
     unless active [
         print rejoin [c-red "  ✗ No active session. Use /new to create one." c-reset]
-        return
+        return none
     ]
 
     ; Update summary if this is the first user message
@@ -353,7 +365,7 @@ process-user-input: func [
         msg: run-agent-turn conversation
         unless msg [
             print rejoin [c-red "  ✗ LLM call failed — check API key and endpoint." c-reset]
-            return
+            return none
         ]
 
         append/only conversation msg
@@ -364,7 +376,7 @@ process-user-input: func [
         if empty? tool-calls [
             ; Save conversation
             session-manager/save-session active
-            return
+            return none
         ]
 
         foreach tc tool-calls [
@@ -389,7 +401,7 @@ process-user-input: func [
                     put fn-args 'path rejoin [to-string config/work-dir path-val]
                 ]
 
-                result: registry/execute fn-name fn-args
+                result: code-agent/registry/execute fn-name fn-args
 
                 either find result "❌" [
                     display-tool-error result
@@ -488,7 +500,7 @@ handle-async-command: func [args [string!] /local parts subcmd name prompt time-
 
         subcmd = "/task" [
             name: parts/2
-            unless name [print rejoin [c-red "  Usage: /async /task <name>" c-reset] return]
+            unless name [print rejoin [c-red "  Usage: /async /task <name>" c-reset] return none]
             task: async-manager/get-task name
             either task [
                 async-manager/poll
@@ -515,7 +527,7 @@ handle-async-command: func [args [string!] /local parts subcmd name prompt time-
 
         subcmd = "/kill" [
             name: parts/2
-            unless name [print rejoin [c-red "  Usage: /async /kill <name>" c-reset] return]
+            unless name [print rejoin [c-red "  Usage: /async /kill <name>" c-reset] return none]
             task: async-manager/get-task name
             either task [
                 result: async-manager/kill task
@@ -527,14 +539,14 @@ handle-async-command: func [args [string!] /local parts subcmd name prompt time-
 
         subcmd = "/drop" [
             name: parts/2
-            unless name [print rejoin [c-red "  Usage: /async /drop <name>" c-reset] return]
+            unless name [print rejoin [c-red "  Usage: /async /drop <name>" c-reset] return none]
             result: async-manager/drop name
             print rejoin [c-dim "  " result c-reset]
         ]
 
         subcmd = "/name" [
             name: parts/2
-            unless name [print rejoin [c-red "  Usage: /async /name <name> "prompt"" c-reset] return]
+            unless name [print rejoin [c-red "  Usage: /async /name <name> "prompt"" c-reset] return none]
 
             time-limit: none
             loop-count: 1
@@ -547,13 +559,13 @@ handle-async-command: func [args [string!] /local parts subcmd name prompt time-
                         either (length? rest) > 1 [
                             time-limit: second rest
                             rest: skip rest 2
-                        ][print rejoin [c-red "  /time needs value" c-reset] return]
+                        ][print rejoin [c-red "  /time needs value" c-reset] return none]
                     ]
                     arg = "/loop" [
                         either (length? rest) > 1 [
                             loop-count: any [attempt [to-integer second rest] 1]
                             rest: skip rest 2
-                        ][print rejoin [c-red "  /loop needs number" c-reset] return]
+                        ][print rejoin [c-red "  /loop needs number" c-reset] return none]
                     ]
                     true [break]
                 ]
@@ -568,7 +580,7 @@ handle-async-command: func [args [string!] /local parts subcmd name prompt time-
                 out
             ]
 
-            if empty? prompt [print rejoin [c-red "  Usage: /async /name <name> "prompt"" c-reset] return]
+            if empty? prompt [print rejoin [c-red "  Usage: /async /name <name> "prompt"" c-reset] return none]
 
             opts: make map! []
             if time-limit [
@@ -735,7 +747,7 @@ start-background-worker: func [
 
 show-session-context: func [session /local conv msg role content tool-calls][
     conv: session/conversation
-    unless block? conv [return]
+    unless block? conv [return none]
 
     print ""
     print rejoin [c-dim "  ── Session Context ──" c-reset]

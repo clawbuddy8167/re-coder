@@ -153,7 +153,7 @@ run-worker: func [
             write-output newline
             write-output "ERROR: LLM call failed."
             write-state "error"
-            return
+            return none
         ]
 
         append/only worker/conversation msg
@@ -169,7 +169,7 @@ run-worker: func [
             write-output rejoin [newline "=== Completed in " turn " turns ===" newline]
             write-state "done"
             save-conversation
-            return
+            return none
         ]
 
         ; Process tool calls

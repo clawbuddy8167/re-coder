@@ -244,11 +244,11 @@ run-worker: func [/local loop-i result][
                 write-output newline
                 write-output "=== Task stopped: time limit reached ===" newline
                 write-state "done"
-                return
+                return none
             ]
             result = 'error [
                 write-state "error"
-                return
+                return none
             ]
             true [
                 write-output newline
