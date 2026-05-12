@@ -278,8 +278,9 @@ sse-reader: make object! [
             "--max-time" to-string config/max-time
             "-X" "POST"
             "-H" rejoin ["Content-Type: " ct-h]
-            "-H" auth-h
+            "-H" rejoin ["Authorization: " auth-h]
             "-H" "Accept: text/event-stream"
+            "-H" "Accept-Encoding: identity"
             "-d" data-arg
             to-string url
         ]
@@ -304,7 +305,7 @@ sse-reader: make object! [
         data-str: trim data-str
         replace/all data-str #"^M" ""
         if data-str = {[DONE]} [
-            callback "DONE"
+            ; Do not pass "DONE" to token callback (would break token/content parity in tests/UI)
             return true
         ]
         if empty? data-str [return false]
@@ -331,7 +332,7 @@ sse-reader: make object! [
 
     ; Read SSE stream with callback
     ; body: JSON string, or file! (recommended: temp file; curl uses -d @path)
-    ; callback receives: [map! chunk | "DONE" | string! error]
+    ; callback receives: text deltas, or strings starting with ERROR: (never "DONE")
     ; Returns: collected full response map
     read-stream: func [
         url      [url! string!]

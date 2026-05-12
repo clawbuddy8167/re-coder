@@ -521,7 +521,8 @@ test-suite "Curl Command Builder" [
         assert-string-contains cmd "-N" "Curl uses -N for no-buffer"
         assert-string-contains cmd "--no-buffer" "Curl uses --no-buffer"
         assert-string-contains cmd "text/event-stream" "Accept header is SSE"
-        assert-string-contains cmd "Bearer sk-test123" "Authorization header present"
+        assert-string-contains cmd "Authorization:" "Authorization header name present"
+        assert-string-contains cmd "Bearer sk-test123" "Bearer token present"
         assert-string-contains cmd url "URL is included"
     ]
     
