@@ -11,6 +11,8 @@ Tested with [Rebol3](https://github.com/Oldes/Rebol3) (`rebol3-bulk-macos-arm64`
 ```
 re-coder-ai/
 ├── re-coder-agent.reb              ← main agent script
+├── re-coder-cli.reb                ← interactive CLI (REPL)
+├── re-coder                        ← launcher script (chmod +x)
 ├── re-coder-rag-search.reb         ← RAG search/retrieval (grep/rg + optional LLM)
 ├── test-re-coder-rag-search.reb    ← RAG search tests (21 tests)
 ├── README.md                       ← this file (English)
@@ -51,6 +53,51 @@ rebol3 re-coder-agent.reb \
 ```
 
 ### RAG Search (Document Retrieval)
+
+### Interactive CLI
+
+Launch an interactive coding session (like Claude Code / Codex):
+
+```bash
+# Interactive mode
+DEEPSEEK_API_KEY=*** ./re-coder
+
+# One-shot mode (prompt as argument)
+DEEPSEEK_API_KEY=*** ./re-coder "Write a Python web scraper"
+
+# With custom model
+DEEPSEEK_API_KEY=*** ./re-coder --model deepseek-chat "Explain async/await"
+```
+
+**CLI Commands:**
+
+| Command | Description |
+|---------|-------------|
+| `/help` | Show help |
+| `/quit` `/exit` | Exit |
+| `/clear` | Clear conversation history |
+| `/history` | Show message count |
+| `/model <name>` | Switch model |
+| `/workdir <dir>` | Set working directory |
+| `/stream` | Toggle streaming ON/OFF |
+| `/config` | Show current config |
+| `/multi` | Toggle multi-line input mode |
+
+**Multi-line input:**
+- Type `///` (triple slash) to enter multi-line mode (one-shot)
+- Or use `/multi` to toggle persistent multi-line mode
+
+```bash
+# Example session
+$ ./re-coder
+  ❯ Create a Python function that reads CSV files and returns a DataFrame
+  ⏳ Thinking...
+  ▸ I'll create a utility function for you...
+  🔧 write_file (path=data_utils.py, content=...)
+  ✓ Written 1234 bytes to data_utils.py
+  🔧 run_command (command=python data_utils.py)
+  ✓ (no output)
+```
 
 `re-coder-rag-search.reb` implements **keyword retrieval** via `grep` or **ripgrep** (`rg`) when available. It is **not** semantic / embedding search: the query string is passed to the shell search tool as the match pattern, so use **tokens that actually appear** in your files (identifiers, comments, doc headings).
 

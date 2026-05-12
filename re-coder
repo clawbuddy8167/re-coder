@@ -1,0 +1,34 @@
+#!/bin/bash
+# re-coder CLI launcher
+# Usage:
+#   ./re-coder                    # Interactive mode
+#   ./re-coder "write a script"   # One-shot mode
+#   DEEPSEEK_API_KEY=xxx ./re-coder
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# Find rebol3
+if command -v rebol3 &>/dev/null; then
+    REBOL="rebol3"
+elif [ -x "/usr/local/bin/rebol3" ]; then
+    REBOL="/usr/local/bin/rebol3"
+elif [ -x "$HOME/.local/bin/rebol3" ]; then
+    REBOL="$HOME/.local/bin/rebol3"
+else
+    echo "❌ rebol3 not found. Install from https://github.com/Oldes/Rebol3/releases"
+    exit 1
+fi
+
+# Check API key
+if [ -z "${DEEPSEEK_API_KEY:-}" ]; then
+    echo "⚠  DEEPSEEK_API_KEY not set."
+    echo "   Set it: export DEEPSEEK_API_KEY=your-key-here"
+    echo "   Or:    DEEPSEEK_API_KEY=xxx ./re-coder"
+    echo ""
+fi
+
+# Run
+cd "$SCRIPT_DIR"
+exec "$REBOL" re-coder-cli.reb "$@"

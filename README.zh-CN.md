@@ -11,6 +11,8 @@
 ```
 re-coder-ai/
 ├── re-coder-agent.reb              ← 主程序
+├── re-coder-cli.reb                ← 交互式 CLI (REPL)
+├── re-coder                        ← 启动脚本 (chmod +x)
 ├── re-coder-rag-search.reb         ← RAG 检索（grep/rg + 可选 LLM）
 ├── test-re-coder-rag-search.reb    ← 检索测试（21 项）
 ├── README.md
@@ -23,6 +25,39 @@ re-coder-ai/
 - 环境变量 **`DEEPSEEK_API_KEY`**
 
 ## 使用
+### 交互式 CLI
+
+启动交互式编码会话（类似 Claude Code / Codex）：
+
+```bash
+# 交互模式
+DEEPSEEK_API_KEY=*** ./re-coder
+
+# 单次模式（传入提示词）
+DEEPSEEK_API_KEY=*** ./re-coder "写一个 Python 爬虫"
+
+# 自定义模型
+DEEPSEEK_API_KEY=*** ./re-coder --model deepseek-chat "解释 async/await"
+```
+
+**CLI 命令：**
+
+| 命令 | 说明 |
+|------|------|
+| `/help` | 显示帮助 |
+| `/quit` `/exit` | 退出 |
+| `/clear` | 清空对话历史 |
+| `/history` | 显示消息计数 |
+| `/model <名称>` | 切换模型 |
+| `/workdir <目录>` | 设置工作目录 |
+| `/stream` | 切换流式输出 ON/OFF |
+| `/config` | 显示当前配置 |
+| `/multi` | 切换多行输入模式 |
+
+**多行输入：**
+- 输入 `///`（三个斜杠）进入多行模式（一次性）
+- 或使用 `/multi` 切换持久多行模式
+
 
 ```bash
 # 基本用法
