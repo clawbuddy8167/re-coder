@@ -19,6 +19,7 @@ re-coder-as-library: true
 do %./re-coder-agent-stream.reb
 do %./session-manager.reb
 do %./async-manager.reb
+do %./scheduler.reb
 
 ; ═══════════════════════════════════════════════════════════
 ;  CLI State
@@ -116,6 +117,12 @@ show-help: func [] [
     print rejoin [c-bright-cyan "  /stream" c-reset c-dim "       Toggle streaming ON/OFF" c-reset]
     print rejoin [c-bright-cyan "  /config" c-reset c-dim "       Show current config" c-reset]
     print rejoin [c-bright-cyan "  /multi" c-reset c-dim "        Toggle multi-line input mode" c-reset]
+    print ""
+    print rejoin [c-bright-cyan c-bold "  Scheduler (Self-Ping)" c-reset]
+    print rejoin [c-dim "  ─────────────────────────────────────────────────────" c-reset]
+    print rejoin [c-bright-cyan "  /scheduler" c-reset c-dim "       Show scheduler status (timers + subagents)" c-reset]
+    print rejoin [c-bright-cyan "  /subagents" c-reset c-dim "       List all subagents" c-reset]
+    print rejoin [c-bright-cyan "  /timers" c-reset c-dim "          List active timers" c-reset]
     print ""
     print rejoin [c-dim "  Multi-line: type " c-reset c-bright-cyan "///" c-reset c-dim " (triple slash) or use " c-reset
                   c-bright-cyan "/multi" c-reset c-dim " toggle" c-reset]
@@ -895,6 +902,53 @@ handle-command: func [cmd [string!] /local parts arg command active result][
         "/bg"      [handle-bg-command any [arg ""]]
         "/async"   [handle-async-command any [arg ""]]
         "/sessions" [show-session-list]
+        "/scheduler" [
+            print ""
+            foreach line scheduler/status [print rejoin ["  " line]]
+            print ""
+        ]
+        "/subagents" [
+            rows: scheduler/list-subagents
+            print ""
+            print rejoin [c-bright-cyan c-bold "  Subagents" c-reset]
+            print rejoin [c-dim "  ────────────────────────────────────────────────────────────────" c-reset]
+            either empty? rows [
+                print rejoin [c-dim "  (no subagents)" c-reset]
+            ][
+                foreach row rows [
+                    state-color: case [
+                        row/3 = "running" [c-yellow]
+                        row/3 = "done"    [c-green]
+                        row/3 = "error"   [c-red]
+                        true              [c-dim]
+                    ]
+                    print rejoin [
+                        "  " c-dim copy/part row/1 12 c-reset " "
+                        state-color pad/with row/3 8 #" " c-reset " "
+                        c-bright-white row/2 c-reset
+                    ]
+                ]
+            ]
+            print ""
+        ]
+        "/timers" [
+            print ""
+            print rejoin [c-bright-cyan c-bold "  Active Timers" c-reset]
+            print rejoin [c-dim "  ────────────────────────────────────────────────────────────────" c-reset]
+            either empty? scheduler/timers [
+                print rejoin [c-dim "  (no active timers)" c-reset]
+            ][
+                foreach t scheduler/timers [
+                    print rejoin [
+                        "  " c-bright-white select t 'id c-reset " → "
+                        c-dim "fires at " select t 'fire-at c-reset " "
+                        either select t 'fired [c-green "(fired)"][c-yellow "(pending)"] c-reset
+                        " " c-dim copy/part select t 'prompt 60 c-reset
+                    ]
+                ]
+            ]
+            print ""
+        ]
         "/fork"    [
             result: session-manager/fork
             either object? result [
@@ -977,7 +1031,50 @@ read-triple-slash: func [/local lines line][
 ;  Main REPL Loop
 ; ═══════════════════════════════════════════════════════════
 
-main-loop: func [/local user-input][
+; ═══════════════════════════════════════════════════════════
+;  Non-blocking Input (for scheduler polling)
+; ═══════════════════════════════════════════════════════════
+;  Uses bash 'read -t' to poll for input with timeout.
+;  Returns user input string, or none if timeout expired.
+
+read-line-timeout: func [timeout-sec [integer!] /local cmd output] [
+    cmd: rejoin [
+        "IFS= read -r -t " timeout-sec " line "
+        "&& printf '%s' \"$line\" "
+        "|| printf '__TIMEOUT__'"
+    ]
+    output: ""
+    call/wait/shell/output cmd output
+    either find output "__TIMEOUT__" [none][output]
+]
+
+; ═══════════════════════════════════════════════════════════
+;  Inject Scheduled Prompt
+; ═══════════════════════════════════════════════════════════
+
+inject-scheduled-prompt: func [prompt [string!] /local active conversation sys-msg] [
+    active: session-manager/get-active
+    unless active [
+        ; Create a session if none exists
+        session-manager/create "Scheduled task" copy []
+        session-manager/set-active session-manager/slot-order/1
+        init-foreground-session
+        active: session-manager/get-active
+    ]
+
+    print ""
+    print rejoin [c-magenta c-bold "  ⏰ Scheduled prompt fired:" c-reset]
+    print rejoin [c-magenta "  " copy/part prompt 120 c-reset]
+
+    ; Add as user message and process
+    process-user-input prompt
+]
+
+; ═══════════════════════════════════════════════════════════
+;  Main REPL Loop (scheduler-aware)
+; ═══════════════════════════════════════════════════════════
+
+main-loop: func [/local user-input] [
     ; Initialize agent
     code-agent/init
 
@@ -989,38 +1086,63 @@ main-loop: func [/local user-input][
 
     cli-state/session-start: now
 
-    ; REPL
+    ; REPL with scheduler polling
     while [cli-state/running] [
-        show-prompt
-
-        user-input: attempt [input]
-
-        unless user-input [
-            print ""
-            print rejoin [c-dim "  Goodbye!" c-reset]
-            break
-        ]
-
-        user-input: trim user-input
-
-        if empty? user-input [continue]
-
-        if user-input = "///" [
-            user-input: read-triple-slash
-            unless user-input [continue]
-        ]
-
-        if (first user-input) = #"/" [
-            handle-command user-input
+        ; ── Step 1: Check for pending scheduler prompts ──
+        scheduler/poll-timers
+        pending: scheduler/next-pending
+        if pending [
+            inject-scheduled-prompt pending
             continue
         ]
 
-        if cli-state/multi-line [
-            user-input: read-multiline
-            unless user-input [continue]
+        ; ── Step 2: Show prompt and read input with timeout ──
+        show-prompt
+
+        ; Use non-blocking read (2s timeout) to allow timer polling
+        either scheduler/has-work [
+            ; If scheduler has work, use short timeout for faster response
+            user-input: read-line-timeout 1
+        ][
+            ; Normal mode: longer timeout, less CPU usage
+            user-input: read-line-timeout 2
         ]
 
-        process-user-input user-input
+        ; ── Step 3: Handle input ──
+        either user-input [
+            ; User typed something
+            unless user-input [
+                print ""
+                print rejoin [c-dim "  Goodbye!" c-reset]
+                break
+            ]
+
+            user-input: trim user-input
+
+            if empty? user-input [continue]
+
+            if user-input = "///" [
+                user-input: read-triple-slash
+                unless user-input [continue]
+            ]
+
+            if (first user-input) = #"/" [
+                handle-command user-input
+                continue
+            ]
+
+            if cli-state/multi-line [
+                user-input: read-multiline
+                unless user-input [continue]
+            ]
+
+            process-user-input user-input
+        ][
+            ; Timeout expired — check scheduler again (loop continues)
+            ; This is where the "self-ping" pattern lives:
+            ; the agent is not blocked on input, it periodically checks
+            ; for due timers and injects them as prompts.
+        ]
     ]
 ]
 

@@ -495,6 +495,61 @@ tool-list-files: func [/path dir-path [string!]] [
 ]
 
 ; ═══════════════════════════════════════════════════════════
+;  Scheduler Tools (self-ping + subagent coordination)
+; ═══════════════════════════════════════════════════════════
+
+; Ensure scheduler is loaded (standalone mode guard)
+unless value? 'scheduler [do %./scheduler.reb]
+
+tool-spawn-subagent: func [
+    name    [string!]
+    prompt  [string!]
+    /model  model-name [string!]
+    /workdir wd [string!]
+] [
+    either model [
+        either workdir [
+            scheduler/spawn-subagent/model/workdir name prompt model-name to-rebol-file wd
+        ][
+            scheduler/spawn-subagent/model name prompt model-name
+        ]
+    ][
+        either workdir [
+            scheduler/spawn-subagent/workdir name prompt to-rebol-file wd
+        ][
+            scheduler/spawn-subagent name prompt
+        ]
+    ]
+]
+
+tool-check-subagent: func [
+    id [string!]
+] [
+    result: scheduler/check-subagent id
+    either map? result [
+        rejoin [
+            "Subagent " id " [" select result 'state "]^/"
+            "Output:^/" select result 'output
+        ]
+    ][
+        to-string result
+    ]
+]
+
+tool-schedule-check: func [
+    seconds [integer!]
+    prompt  [string!]
+] [
+    delay: to-time seconds
+    result: scheduler/schedule-timer delay prompt
+    either string? result [
+        rejoin ["❌ " result]
+    ][
+        rejoin ["✅ Scheduled self-check in " seconds "s (timer: " result ") — will inject: " copy/part prompt 80]
+    ]
+]
+
+; ═══════════════════════════════════════════════════════════
 ;  OpenAI-style Tool Specs (for LLM tool definitions)
 ; ═══════════════════════════════════════════════════════════
 
@@ -556,6 +611,53 @@ tool-specs: compose/deep [
             ]
         ]
     ]
+    ; ── Scheduler tools ──
+    #[
+        type: {function}
+        function: #[
+            name: {spawn_subagent}
+            description: {Spawn a background subagent to work on a task independently. Returns immediately with a subagent ID. Use check_subagent to poll its status.}
+            parameters: #[
+                type: {object}
+                properties: #[
+                    name: #[type: {string} description: {A short name for this subagent task}]
+                    prompt: #[type: {string} description: {The full prompt for the subagent}]
+                    model: #[type: {string} description: {Optional model override}]
+                    workdir: #[type: {string} description: {Optional working directory}]
+                ]
+                required: [{name} {prompt}]
+            ]
+        ]
+    ]
+    #[
+        type: {function}
+        function: #[
+            name: {check_subagent}
+            description: {Check the status and output of a spawned subagent. Returns state (running/done/error) and output.}
+            parameters: #[
+                type: {object}
+                properties: #[
+                    id: #[type: {string} description: {The subagent ID from spawn_subagent}]
+                ]
+                required: [{id}]
+            ]
+        ]
+    ]
+    #[
+        type: {function}
+        function: #[
+            name: {schedule_check}
+            description: {Schedule a self-ping: after N seconds, the prompt is injected back into your conversation. Use this to check on subagents after a delay.}
+            parameters: #[
+                type: {object}
+                properties: #[
+                    seconds: #[type: {integer} description: {Seconds to wait}]
+                    prompt: #[type: {string} description: {The prompt to inject when the timer fires}]
+                ]
+                required: [{seconds} {prompt}]
+            ]
+        ]
+    ]
 ]
 
 ; ═══════════════════════════════════════════════════════════
@@ -569,6 +671,9 @@ You have these tools:
 2. `read_file(path)` — Read a file's contents
 3. `run_command(command)` — Execute a shell command
 4. `list_files(path)` — List files in a directory
+5. `spawn_subagent(name, prompt)` — Spawn a background subagent (returns ID immediately)
+6. `check_subagent(id)` — Check subagent status and get output
+7. `schedule_check(seconds, prompt)` — Schedule a self-ping after N seconds
 
 Workflow:
 1. Analyze the user's request
@@ -577,11 +682,20 @@ Workflow:
 4. Always verify: after writing code, run it to make sure it works
 5. Report the final result to the user
 
+Self-Scheduling Pattern (IMPORTANT):
+When you spawn subagents, you can stay alive by scheduling self-checks:
+- spawn_subagent("build frontend", "Build the React app...") → returns id "sa-abc123"
+- spawn_subagent("build backend", "Build the API server...") → returns id "sa-def456"
+- schedule_check(10, "Check if subagent sa-abc123 and sa-def456 are done")
+After this, stop responding. When the timer fires, you get the prompt back automatically.
+Then check_subagent each one, collect results, and either schedule another check or report.
+
 Rules:
 - Write clean, well-commented code
 - Include error handling
 - Run verification commands to confirm correctness
 - If something fails, fix it and retry
+- For parallel work, use spawn_subagent + schedule_check instead of blocking waits
 }
 
 ; ═══════════════════════════════════════════════════════════
@@ -604,6 +718,10 @@ code-agent: make object! [
         registry/register {read_file}   'tool-read-file   [path]                 pick tool-specs 2
         registry/register {run_command} 'tool-run-command [command]              pick tool-specs 3
         registry/register {list_files}  'tool-list-files  [/path dir-path]       pick tool-specs 4
+        ; Scheduler tools
+        registry/register {spawn_subagent} 'tool-spawn-subagent [name prompt /model model-name /workdir wd] pick tool-specs 5
+        registry/register {check_subagent} 'tool-check-subagent [id]              pick tool-specs 6
+        registry/register {schedule_check} 'tool-schedule-check [seconds prompt]  pick tool-specs 7
     ]
 
     ; Run with streaming
