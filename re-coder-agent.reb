@@ -446,6 +446,77 @@ tool-list-files: func [/path dir-path [string!]] [
 ]
 
 ; ═══════════════════════════════════════════════════════════
+;  Memory Manager (load before tools, so tools can use it)
+; ═══════════════════════════════════════════════════════════
+
+unless value? 'memory-manager [do %./memory-manager.reb]
+
+; ═══════════════════════════════════════════════════════════
+;  Memory Tools
+; ═══════════════════════════════════════════════════════════
+
+tool-read-memory: func [
+    /path path-str [string!]
+][
+    either path [
+        val: memory-get path-str
+        either none? val [
+            rejoin [{❌ Memory path not found: } path-str]
+        ][
+            either object? val [
+                mold val
+            ][
+                to-string mold val
+            ]
+        ]
+    ][
+        memory-summary
+    ]
+]
+
+tool-write-memory: func [
+    key   [string!]
+    value [string!]
+][
+    ; Try to parse value as Rebol, fall back to string
+    parsed: try [load value]
+    actual-val: either any [error? parsed  none? parsed] [value] [parsed]
+
+    either find key "/" [
+        ; Nested path: "corrections" append, "kv/foo" set
+        either find key "kv/" [
+            kv-key: copy/part skip key 3 length? key
+            put memory/kv kv-key actual-val
+            save-memory
+            rejoin [{✅ Set kv/} kv-key]
+        ][
+            memory-set key actual-val
+            save-memory
+            rejoin [{✅ Set } key]
+        ]
+    ][
+        ; Top-level: append to a block or set a value
+        either key = "corrections" [
+            remember-correction "manual" value
+        ][
+            either key = "iterations" [
+                remember-iteration value "manual" "recorded"
+            ][
+                put memory/kv key actual-val
+                save-memory
+                rejoin [{✅ Set kv/} key]
+            ]
+        ]
+    ]
+]
+
+tool-search-memory: func [
+    keyword [string!]
+][
+    memory-search keyword
+]
+
+; ═══════════════════════════════════════════════════════════
 ;  Scheduler Tools (self-ping + subagent coordination)
 ; ═══════════════════════════════════════════════════════════
 
@@ -562,6 +633,50 @@ tool-specs: compose/deep [
             ]
         ]
     ]
+    ; ── Memory tools ──
+    #[
+        type: {function}
+        function: #[
+            name: {read_memory}
+            description: {Read agent memory. No args = full summary. With path = read specific field, e.g. "user/preferences" or "corrections". Memory is persisted across sessions.}
+            parameters: #[
+                type: {object}
+                properties: #[
+                    path: #[type: {string} description: {Optional dot-path like "user/name" or "corrections". Omit for full summary.}]
+                ]
+                required: []
+            ]
+        ]
+    ]
+    #[
+        type: {function}
+        function: #[
+            name: {write_memory}
+            description: {Write to agent memory. Key can be "corrections" (append), "iterations" (append), "kv/xxx" (set key-value), or a nested path. Value is stored as Rebol data. Memory auto-saves to memory.reb.}
+            parameters: #[
+                type: {object}
+                properties: #[
+                    key: #[type: {string} description: {Memory key: "corrections", "iterations", "kv/mykey", "user/preferences"}]
+                    value: #[type: {string} description: {Value to store. Can be Rebol syntax or plain text.}]
+                ]
+                required: [{key} {value}]
+            ]
+        ]
+    ]
+    #[
+        type: {function}
+        function: #[
+            name: {search_memory}
+            description: {Search agent memory for a keyword. Scans corrections, iterations, projects, skills, and kv store. Returns matching entries.}
+            parameters: #[
+                type: {object}
+                properties: #[
+                    keyword: #[type: {string} description: {Search term to find in memory}]
+                ]
+                required: [{keyword}]
+            ]
+        ]
+    ]
     ; ── Scheduler tools ──
     #[
         type: {function}
@@ -622,16 +737,30 @@ You have these tools:
 2. `read_file(path)` — Read a file's contents
 3. `run_command(command)` — Execute a shell command
 4. `list_files(path)` — List files in a directory
-5. `spawn_subagent(name, prompt)` — Spawn a background subagent (returns ID immediately)
-6. `check_subagent(id)` — Check subagent status and get output
-7. `schedule_check(seconds, prompt)` — Schedule a self-ping after N seconds
+5. `read_memory(path?)` — Read your persistent memory (omit path for full summary)
+6. `write_memory(key, value)` — Write to persistent memory (auto-saves to memory.reb)
+7. `search_memory(keyword)` — Search memory for a keyword
+8. `spawn_subagent(name, prompt)` — Spawn a background subagent (returns ID immediately)
+9. `check_subagent(id)` — Check subagent status and get output
+10. `schedule_check(seconds, prompt)` — Schedule a self-ping after N seconds
+
+Memory System (IMPORTANT):
+- You have persistent memory in memory.reb that survives across sessions
+- Memory includes: user profile, corrections, iteration history, project notes, kv store
+- When the user corrects you, write_memory("corrections", "the correction") so you remember
+- When you modify yourself, write_memory("iterations", "what changed")
+- When you learn about a project, write_memory("kv/project-name", "notes")
+- At the start of complex tasks, read_memory() to recall relevant context
+- Use search_memory("keyword") to find related past experiences
 
 Workflow:
-1. Analyze the user's request
-2. Plan which files to create / modify
-3. Use tools one at a time
-4. Always verify: after writing code, run it to make sure it works
-5. Report the final result to the user
+1. Check memory for relevant context: read_memory()
+2. Analyze the user's request
+3. Plan which files to create / modify
+4. Use tools one at a time
+5. Always verify: after writing code, run it to make sure it works
+6. Record learnings: write_memory("iterations", "what I did")
+7. Report the final result to the user
 
 Self-Scheduling Pattern (IMPORTANT):
 When you spawn subagents, you can stay alive by scheduling self-checks:
@@ -649,6 +778,7 @@ Rules:
 - Run verification commands to confirm correctness
 - If something fails, fix it and retry
 - For parallel work, use spawn_subagent + schedule_check instead of blocking waits
+- Remember corrections and learnings in memory
 }
 
 ; ═══════════════════════════════════════════════════════════
@@ -661,6 +791,9 @@ code-agent: make object! [
     init: func [] [
         set in self 'registry tool-registry
 
+        ; Load persistent memory
+        load-memory
+
         ; Register tools — pass word! (not function!) to avoid auto-evaluation
         ; params = words-of output at compile time:
         ;   tool-write-file:  [path content]
@@ -671,21 +804,33 @@ code-agent: make object! [
         registry/register {read_file}   'tool-read-file   [path]                 pick tool-specs 2
         registry/register {run_command} 'tool-run-command [command]              pick tool-specs 3
         registry/register {list_files}  'tool-list-files  [/path dir-path]       pick tool-specs 4
+        ; Memory tools
+        registry/register {read_memory}   'tool-read-memory   [/path path-str]   pick tool-specs 5
+        registry/register {write_memory}  'tool-write-memory  [key value]        pick tool-specs 6
+        registry/register {search_memory} 'tool-search-memory [keyword]          pick tool-specs 7
         ; Scheduler tools
-        registry/register {spawn_subagent} 'tool-spawn-subagent [name prompt /model model-name /workdir wd] pick tool-specs 5
-        registry/register {check_subagent} 'tool-check-subagent [id]              pick tool-specs 6
-        registry/register {schedule_check} 'tool-schedule-check [seconds prompt]  pick tool-specs 7
+        registry/register {spawn_subagent} 'tool-spawn-subagent [name prompt /model model-name /workdir wd] pick tool-specs 8
+        registry/register {check_subagent} 'tool-check-subagent [id]              pick tool-specs 9
+        registry/register {schedule_check} 'tool-schedule-check [seconds prompt]  pick tool-specs 10
     ]
 
     run: func [user-prompt [string!]] [
-        ; Build initial messages
+        ; Build initial messages with memory context
         sys-msg: make map! reduce [
             to-set-word 'role {system}
             to-set-word 'content system-prompt
         ]
+
+        ; Inject memory summary into user message
+        mem-context: memory-summary
+        enriched-prompt: rejoin [
+            user-prompt
+            {^/^[Memory Context:^/} mem-context {^/]^/}
+        ]
+
         user-msg: make map! reduce [
             to-set-word 'role {user}
-            to-set-word 'content user-prompt
+            to-set-word 'content enriched-prompt
         ]
         messages: reduce [sys-msg user-msg]
 

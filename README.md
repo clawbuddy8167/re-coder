@@ -18,9 +18,37 @@ re-coder-ai/
 ├── async-manager.reb               ← async task management
 ├── re-coder                        ← launcher script (chmod +x)
 ├── re-coder-rag-search.reb         ← RAG search/retrieval (grep/rg + optional LLM)
+├── memory-manager.reb              ← persistent memory system (Rebol-native)
+├── memory.reb                      ← agent memory file (auto-managed)
 ├── test-re-coder-rag-search.reb    ← RAG search tests (21 tests)
 ├── README.md                       ← this file (English)
 └── README.zh-CN.md                 ← Chinese readme
+```
+
+### Memory System
+
+The agent has **persistent memory** stored as executable Rebol code in `memory.reb`. The agent can read, modify, and search its own memory across sessions.
+
+```bash
+# Memory tools available to the agent:
+read_memory()              # Full memory summary
+read_memory("user/name")   # Read specific field
+write_memory("corrections", "用户说营收按合同算")  # Record correction
+write_memory("kv/project-x", "使用 Rust + WASM")   # Ad-hoc notes
+search_memory("营收")       # Search all memory for keyword
+```
+
+Memory structure:
+```rebol
+make object! [
+    user:       #[name: "..." language: "..." preferences: #[]]
+    env:        #[os: "..." projects-dir: "..." tools: [...]]
+    skills:     [#[name: "..." version: 1 last-used: ...]]
+    corrections: [#[date: ... topic: "..." correction: "..."]]
+    iterations: [#[date: ... change: "..." result: "pass"|"fail"]]
+    projects:   [#[project: "..." path: "..." notes: "..."]]
+    kv:         #[key: "value" ...]
+]
 ```
 
 ## Requirements
