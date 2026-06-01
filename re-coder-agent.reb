@@ -317,7 +317,13 @@ tool-registry: make object! [
         result
     ]
 
-    execute: func [name [string!] args [map!]] [
+    execute: func [name [string!] args [map!] /local hook-result entry fn-word params arg-block call-block result] [
+        ; ── L2: Run hooks BEFORE execution (0 LLM tokens) ──
+        hook-result: run-hooks name args
+        if string? hook-result [
+            return hook-result  ; Hook blocked execution
+        ]
+
         entry: select tools name
         unless entry [return rejoin [{❌ Unknown tool: } name]]
 
@@ -793,6 +799,9 @@ code-agent: make object! [
 
         ; Load persistent memory
         load-memory
+
+        ; ── L2: Register executable hooks (0 token cost) ──
+        register-hook {run_command} 'shell-command-hook {block}
 
         ; Register tools — pass word! (not function!) to avoid auto-evaluation
         ; params = words-of output at compile time:

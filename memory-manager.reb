@@ -289,6 +289,154 @@ discover-tools: func [/local tools-list tool-name] [
 ]
 
 ; ═══════════════════════════════════════════════════════════
+;  L2: Executable Rules Engine (0 token cost)
+;
+;  Rules execute as Rebol code — LLM never sees them.
+;  validate-command intercepts bad shell commands BEFORE execution.
+;  run-hooks intercepts any tool call BEFORE execution.
+; ═══════════════════════════════════════════════════════════
+
+; Validate a shell command against memory/shell-rules
+; Returns: none if OK, or a string with the fix suggestion
+validate-command: func [cmd [string!] /local rule] [
+    foreach rule memory/shell-rules [
+        if find cmd select rule 'trigger [
+            return rejoin [
+                {⚠️ } select rule 'msg { (用 } select rule 'fix { 替代)}
+            ]
+        ]
+    ]
+    none
+]
+
+; Register a pre-execution hook for a tool
+; hook-fn receives args map, returns none (OK) or string (block with message)
+register-hook: func [
+    tool-name [string!]
+    hook-fn   [word!]
+    action    [string!]  ; "block" or "warn"
+][
+    append memory/hooks reduce [
+        make map! reduce [
+            to-set-word 'tool   tool-name
+            to-set-word 'hook   hook-fn
+            to-set-word 'action action
+        ]
+    ]
+]
+
+; Run all hooks for a given tool with its args
+; Returns: none if all pass, or string with first blocking message
+run-hooks: func [
+    tool-name [string!]
+    args      [map!]
+    /local h hook-fn result
+][
+    foreach h memory/hooks [
+        if (select h 'tool) = tool-name [
+            hook-fn: select h 'hook
+            unless hook-fn [continue]
+
+            ; Invoke hook: do reduce [:hook-fn args]
+            result: try [do reduce [to-get-word hook-fn args]]
+            if error? result [
+                print [{⚠️ Hook error: } mold result]
+                continue
+            ]
+
+            if string? result [
+                either (select h 'action) = "block" [
+                    return result  ; Block execution
+                ][
+                    print result   ; Warn but continue
+                ]
+            ]
+        ]
+    ]
+    none
+]
+
+; Built-in shell command hook (auto-registered on load)
+shell-command-hook: func [args [map!] /local cmd] [
+    cmd: select args 'command
+    if string? cmd [validate-command cmd]
+]
+
+; ═══════════════════════════════════════════════════════════
+;  L2: Executable Rules Engine (0 token cost)
+;
+;  Rules execute as Rebol code — LLM never sees them.
+;  validate-command intercepts bad shell commands BEFORE execution.
+;  run-hooks intercepts any tool call BEFORE execution.
+; ═══════════════════════════════════════════════════════════
+
+; Validate a shell command against memory/shell-rules
+; Returns: none if OK, or a string with the fix suggestion
+validate-command: func [cmd [string!] /local rule] [
+    foreach rule memory/shell-rules [
+        if find cmd select rule 'trigger [
+            return rejoin [
+                {⚠️ } select rule 'msg { (用 } select rule 'fix { 替代)}
+            ]
+        ]
+    ]
+    none
+]
+
+; Register a pre-execution hook for a tool
+; hook-fn receives args map, returns none (OK) or string (block with message)
+register-hook: func [
+    tool-name [string!]
+    hook-fn   [word!]
+    action    [string!]  ; "block" or "warn"
+][
+    append memory/hooks reduce [
+        make map! reduce [
+            to-set-word 'tool   tool-name
+            to-set-word 'hook   hook-fn
+            to-set-word 'action action
+        ]
+    ]
+]
+
+; Run all hooks for a given tool with its args
+; Returns: none if all pass, or string with first blocking message
+run-hooks: func [
+    tool-name [string!]
+    args      [map!]
+    /local h hook-fn result
+][
+    foreach h memory/hooks [
+        if (select h 'tool) = tool-name [
+            hook-fn: select h 'hook
+            unless hook-fn [continue]
+
+            ; Invoke hook: do reduce [:hook-fn args]
+            result: try [do reduce [to-get-word hook-fn args]]
+            if error? result [
+                print [{⚠️ Hook error: } mold result]
+                continue
+            ]
+
+            if string? result [
+                either (select h 'action) = "block" [
+                    return result  ; Block execution
+                ][
+                    print result   ; Warn but continue
+                ]
+            ]
+        ]
+    ]
+    none
+]
+
+; Built-in shell command hook (auto-registered on load)
+shell-command-hook: func [args [map!] /local cmd] [
+    cmd: select args 'command
+    if string? cmd [validate-command cmd]
+]
+
+; ═══════════════════════════════════════════════════════════
 ;  Export as text (for injecting into system prompt)
 ; ═══════════════════════════════════════════════════════════
 
